@@ -10,7 +10,10 @@ const DEFAULT_STATE = {
   speed: 100,
   loot: 50,
   filter: "all", // all | open | guarded
+  backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
+const BACKUP_EVERY = 3 * 24 * 3.6e6;  // напоминать, если копии нет дольше 3 дней
+const SNOOZE = 24 * 3.6e6;
 const FILTERS = { all: "Все цели", open: "Без защиты", guarded: "С защитой" };
 
 const $ = id => document.getElementById(id);
@@ -36,10 +39,14 @@ function normalize(saved) {
   const s = { ...structuredClone(DEFAULT_STATE), ...saved };
   // Корабли из старых версий: без трюма и расхода топлива.
   s.ships = s.ships.map(ship => ({ ...(ship.id === "mega" ? MEGA : { capacity: 0, consumption: 0 }), ...ship }));
+  s.backup = { ...DEFAULT_STATE.backup, ...s.backup };
+  if (!s.backup.at) s.backup.at = Date.now();  // отсчёт — с первого запуска
   return s;
 }
 
-function save() {
+/** Записать состояние. `changed: false` — служебная запись, не считается изменением данных. */
+function save({ changed = true } = {}) {
+  if (changed) state.backup.changedAt = Date.now();
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch { setStatus("data-status", "Браузер не дал сохранить данные. Сделайте резервную копию.", "err"); }
   render();
@@ -177,9 +184,17 @@ function renderSettings() {
     </div>`).join("");
 }
 
+function renderBackupReminder(now) {
+  const b = state.backup;
+  const due = b.changedAt > b.at && now - b.at > BACKUP_EVERY && now > b.snoozeUntil;
+  $("backup-reminder").hidden = !due;
+  if (due) $("backup-age").textContent = `Резервной копии нет ${Math.floor((now - b.at) / (24 * 3.6e6))} дн., а данные с тех пор менялись.`;
+}
+
 function render() {
   const now = Date.now();
   $("clock").textContent = clock(now);
+  renderBackupReminder(now);
   renderTargets(now);
   renderPlanets();
   renderSettings();
@@ -189,6 +204,7 @@ function render() {
 function tick() {
   const now = Date.now();
   $("clock").textContent = clock(now);
+  renderBackupReminder(now);
   renderTargets(now);
 }
 
@@ -280,15 +296,32 @@ $("targets").addEventListener("toggle", e => {
   if (c) e.target.open ? openDetails.add(c) : openDetails.delete(c);
 }, true);
 
+function markBackup() {
+  state.backup.at = Date.now();
+  save({ changed: false });
+}
+
+async function copyBackup() {
+  $("data-text").value = JSON.stringify(state, null, 1);
+  try {
+    await navigator.clipboard.writeText($("data-text").value);
+    setStatus("data-status", "Скопировано. Вставьте в заметки или файл.", "ok");
+  } catch {
+    $("data-text").scrollIntoView({ block: "center" });
+    $("data-text").select();
+    setStatus("data-status", "Не удалось скопировать автоматически — текст выделен, скопируйте вручную.", "err");
+  }
+  markBackup();
+}
+
 $("export").addEventListener("click", () => {
   $("data-text").value = JSON.stringify(state, null, 1);
   setStatus("data-status", "Скопируйте текст и сохраните в заметках или файле.", "ok");
+  markBackup();
 });
-$("copy").addEventListener("click", async () => {
-  $("data-text").value = JSON.stringify(state, null, 1);
-  try { await navigator.clipboard.writeText($("data-text").value); setStatus("data-status", "Скопировано в буфер обмена.", "ok"); }
-  catch { $("data-text").select(); setStatus("data-status", "Не удалось скопировать автоматически — текст выделен, скопируйте вручную.", "err"); }
-});
+$("copy").addEventListener("click", copyBackup);
+$("backup-now").addEventListener("click", copyBackup);
+$("backup-later").addEventListener("click", () => { state.backup.snoozeUntil = Date.now() + SNOOZE; save({ changed: false }); });
 $("import").addEventListener("click", () => {
   try {
     const data = JSON.parse($("data-text").value);

@@ -57,6 +57,7 @@
   .pill.warn { color: var(--warn); border-color: var(--warn); }
   .pill.danger { color: var(--danger); border-color: var(--danger); }
   .pill.ok { color: var(--gain); border-color: var(--gain); }
+  .reminder { border-color: var(--warn); }
   button.small { padding: 4px 10px; font-size: 13px; }
   .item input { flex: 1 1 0; }
   .item input.num { flex: 0 1 8em; }
@@ -78,6 +79,16 @@
     <h1>Space Kings Разведка</h1>
     <span class="muted num" id="clock"></span>
   </header>
+
+  <div class="card reminder" id="backup-reminder" role="status" hidden>
+    <b>Пора сделать резервную копию</b>
+    <span id="backup-age"></span>
+    <span class="muted" style="font-size:14px">Данные хранятся только в этом браузере. Скопируйте их и сохраните в заметках.</span>
+    <div class="row">
+      <button class="primary" id="backup-now">Скопировать копию</button>
+      <button id="backup-later">Напомнить завтра</button>
+    </div>
+  </div>
 
   <section aria-labelledby="h-add">
     <h2 id="h-add">Шпионский отчёт</h2>
