@@ -97,9 +97,10 @@
 
   <section aria-labelledby="h-add">
     <h2 id="h-add">Шпионский отчёт</h2>
-    <textarea id="report-text" placeholder="Вставьте один или несколько отчётов: «Шпионский доклад с … [8:75:10] от …»"></textarea>
+    <textarea id="report-text" placeholder="Вставьте один отчёт или сразу пачку из списка сообщений: «Шпионский доклад с … [8:75:10] от …»"></textarea>
     <div class="row">
-      <button class="primary" id="report-save">Сохранить отчёт</button>
+      <button class="primary" id="report-save">Сохранить</button>
+      <label class="file-button">Из файла .txt<input type="file" id="report-file" accept=".txt,text/plain" class="visually-hidden"></label>
       <span class="status" id="report-status" role="status"></span>
     </div>
   </section>

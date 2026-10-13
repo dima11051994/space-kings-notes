@@ -282,29 +282,50 @@ function tick() {
 
 // ---- Отчёты и свои данные ----
 
-/** Добавить отчёты: по каждой планете остаётся самый свежий. */
+/** Добавить отчёты: по каждой планете остаётся самый свежий, пустые разделы берутся из сохранённого. */
 function mergeReports(reports) {
   const put = [];
-  for (const r of reports) {
+  let added = 0, kept = 0;
+  // Старые отчёты раньше: в пакете может быть несколько отчётов по одной планете.
+  for (const r of [...reports].sort((a, b) => a.time - b.time)) {
     const old = targets[r.coords];
-    if (old && old.time >= r.time) continue;
-    targets[r.coords] = r;
-    put.push(r);
+    const merged = SK.mergeReport(old, r);
+    if (!merged) continue;
+    if (!old) added++;
+    else if (merged !== r && ["fleet", "defense", "buildings", "research"].some(k => merged[k] !== r[k])) kept++;
+    targets[r.coords] = merged;
+    put.push(merged);
   }
-  return put;
+  // Повторные отчёты по одной планете в пакете — одна запись.
+  return { put: [...new Map(put.map(r => [r.coords, targets[r.coords]])).values()], added, kept };
+}
+
+function processReports(text) {
+  const reports = SK.parseReports(text);
+  if (!reports.length) {
+    setStatus("report-status", "Не нашёл отчёт. Текст должен содержать «Шпионский доклад с … [г:с:п] от …».", "err");
+    return false;
+  }
+  const { put, added, kept } = mergeReports(reports);
+  const stale = reports.length - put.length;
+  setStatus("report-status", [
+    `Отчётов: ${reports.length}`,
+    `новых целей: ${added}`,
+    `обновлено: ${put.length - added}`,
+    kept ? `из них со старыми постройками, флотом и т. п.: ${kept}` : "",
+    stale ? `пропущено (есть отчёт новее или такой же): ${stale}` : "",
+  ].filter(Boolean).join(", ") + ".", put.length ? "ok" : "err");
+  if (put.length) save({ put });
+  return put.length > 0;
 }
 
 $("report-save").addEventListener("click", () => {
-  const reports = SK.parseReports($("report-text").value);
-  if (!reports.length) {
-    setStatus("report-status", "Не нашёл отчёт. Текст должен начинаться с «Шпионский доклад с …».", "err");
-    return;
-  }
-  const put = mergeReports(reports), stale = reports.length - put.length;
-  if (put.length) $("report-text").value = "";
-  setStatus("report-status",
-    `Сохранено: ${put.length}` + (stale ? `, пропущено (есть отчёт новее или такой же): ${stale}` : ""), put.length ? "ok" : "err");
-  if (put.length) save({ put });
+  if (processReports($("report-text").value)) $("report-text").value = "";
+});
+$("report-file").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (file) processReports(await file.text());
 });
 
 $("planet-form").addEventListener("submit", e => {
@@ -456,7 +477,7 @@ $("backup-file").addEventListener("change", async e => {
 });
 
 $("import-merge").addEventListener("click", () => {
-  const put = mergeReports(pendingImport.targets);
+  const { put } = mergeReports(pendingImport.targets);
   $("import-actions").hidden = true;
   setStatus("data-status", `Добавлено и обновлено отчётов: ${fmt(put.length)}. Свои планеты и настройки не менялись.`, "ok");
   pendingImport = null;

@@ -3,6 +3,9 @@ const SK = (() => {
   const HEADER = /Шпионский доклад с (.+?) \[(\d+:\d+:\d+)\] от (\d\d)-(\d\d)-(\d{4}) (\d\d):(\d\d):(\d\d)/g;
   const SECTIONS = { "Флот": "fleet", "Защита": "defense", "Постройки": "buildings", "Исследования": "research" };
   const PAIR = /(\D+?)\s+(\d[\d.]*)(?=\s|$)/g;
+  // Конец отчёта в пакете: кнопки под отчётом и заголовок следующего сообщения.
+  const REPORT_END = /^(Атаковать|Симулятор атаки|Ракетный симулятор|Шанс обнаружения|\d\d\.\d\d\.\d\d \d\d:\d\d:\d\d )/;
+  const DETAILS = ["fleet", "defense", "buildings", "research"];
 
   // Худшая (самая высокая) средняя температура по слоту: меньше всего дейтерия.
   const SLOT_TEMP = { 1: 260, 2: 210, 3: 160, 4: 110, 5: 100, 6: 90, 7: 80, 8: 70,
@@ -33,6 +36,7 @@ const SK = (() => {
       for (const raw of body.split(/\r?\n/)) {
         const line = raw.trim();
         if (!line) continue;
+        if (REPORT_END.test(line)) break;
         if (SECTIONS[line]) { section = SECTIONS[line]; continue; }
         for (const [, name, value] of line.matchAll(PAIR)) {
           report[section][name.trim()] = Number(value.replace(/\./g, ""));
@@ -40,6 +44,21 @@ const SK = (() => {
       }
       return report;
     });
+  }
+
+  /**
+   * Новый отчёт поверх сохранённого; null, если сохранённый не старше.
+   * Пустые флот, оборона, постройки и исследования в новом отчёте значат «не видно»:
+   * берутся из сохранённого.
+   */
+  function mergeReport(old, fresh) {
+    if (!old) return fresh;
+    if (old.time >= fresh.time) return null;
+    const merged = { ...fresh };
+    for (const k of DETAILS) {
+      if (!Object.keys(fresh[k] || {}).length && Object.keys(old[k] || {}).length) merged[k] = old[k];
+    }
+    return merged;
   }
 
   function parseCoords(text) {
@@ -140,7 +159,7 @@ const SK = (() => {
       .sort((a, b) => a.seconds - b.seconds);
   }
 
-  return { parseReports, parseCoords, production, resourcesAt, guards, fuelPerShip, shipsNeeded,
+  return { parseReports, mergeReport, parseCoords, production, resourcesAt, guards, fuelPerShip, shipsNeeded,
            distance, shipSpeed, flightSeconds, routes, SLOT_TEMP, DRIVES, RESOURCES, HARMLESS };
 })();
 
