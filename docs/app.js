@@ -10,11 +10,20 @@ const DEFAULT_STATE = {
   speed: 100,
   loot: 50,
   filter: "all", // all | open | guarded
+  sort: "loot",   // loot | coords
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
 const BACKUP_EVERY = 3 * 24 * 3.6e6;  // напоминать, если копии нет дольше 3 дней
 const SNOOZE = 24 * 3.6e6;
 const FILTERS = { all: "Все цели", open: "Без защиты", guarded: "С защитой" };
+const SORTS = {
+  // Сначала планеты с полным складом: они простаивают. Дальше — по добыче.
+  loot: { name: "По добыче", compare: (a, b) => (b.full.some(Boolean) - a.full.some(Boolean)) || b.total - a.total },
+  coords: { name: "По координатам", compare: (a, b) => {
+    const x = SK.parseCoords(a.report.coords), y = SK.parseCoords(b.report.coords);
+    return x.g - y.g || x.s - y.s || x.p - y.p;
+  } },
+};
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -93,8 +102,7 @@ function renderTargets(now) {
   const all = Object.values(state.targets).map(r => targetView(r, now));
   const views = all
     .filter(v => state.filter === "all" || (state.filter === "guarded") === guarded(v))
-    // Сначала планеты с полным складом: они простаивают. Дальше — по добыче.
-    .sort((a, b) => (b.full.some(Boolean) - a.full.some(Boolean)) || b.total - a.total);
+    .sort((SORTS[state.sort] || SORTS.loot).compare);
   $("filter-count").textContent = `${views.length} из ${all.length}`;
   if (!views.length) {
     $("targets").innerHTML = all.length
@@ -169,6 +177,7 @@ function renderSettings() {
   $("speed").value = state.speed;
   $("loot").value = state.loot;
   $("filter").value = state.filter;
+  $("sort").value = state.sort;
   const driveOptions = sel => Object.entries(SK.DRIVES)
     .map(([k, d]) => `<option value="${k}"${k === sel ? " selected" : ""}>${d.name}</option>`).join("");
   $("ships").innerHTML = state.ships.map(s => `<div class="card ship">
@@ -266,6 +275,7 @@ $("ship").addEventListener("change", e => { state.shipId = e.target.value; save(
 $("speed").addEventListener("change", e => { state.speed = +e.target.value; save(); });
 $("loot").addEventListener("change", e => { state.loot = Math.min(100, Math.max(1, +e.target.value || 50)); save(); });
 $("filter").addEventListener("change", e => { state.filter = e.target.value; save(); });
+$("sort").addEventListener("change", e => { state.sort = e.target.value; save({ changed: false }); });
 
 $("ship-add").addEventListener("click", () => {
   state.ships.push({ id: "s" + Date.now(), name: "Новый корабль", drive: "combustion", base: 1, capacity: 0, consumption: 0 });
@@ -341,6 +351,7 @@ $("import-confirm").addEventListener("click", () => {
 
 $("speed").innerHTML = Array.from({ length: 10 }, (_, i) => `<option value="${100 - i * 10}">${100 - i * 10}%</option>`).join("");
 $("filter").innerHTML = Object.entries(FILTERS).map(([k, n]) => `<option value="${k}">${n}</option>`).join("");
+$("sort").innerHTML = Object.entries(SORTS).map(([k, o]) => `<option value="${k}">${o.name}</option>`).join("");
 render();
 setInterval(tick, 15000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
