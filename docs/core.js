@@ -47,6 +47,10 @@ const SK = (() => {
     return m && { g: +m[1], s: +m[2], p: +m[3] };
   }
 
+  // Естественный прирост в час (металл, кристалл, дейтерий): идёт без шахт и не зависит от энергии.
+  // Значения OGame (30 / 15), умноженные на 5, как остальные формулы добычи; в игре не сверены.
+  const NATURAL = [150, 75, 0];
+
   const growth = (level, base) => base * level * 1.1 ** level;
 
   /** Прирост в час и данные для пояснения расчёта. */
@@ -64,8 +68,8 @@ const SK = (() => {
     return {
       temp, energy, consumption, factor,
       rates: [
-        growth(lm, 150) * factor,
-        growth(lc, 100) * factor,
+        NATURAL[0] + growth(lm, 150) * factor,
+        NATURAL[1] + growth(lc, 100) * factor,
         growth(ld, 50) * (1.36 - 0.004 * temp) * factor - growth(lf, 50),
       ],
       caps: ["Хранилище металла", "Хранилище кристаллов", "Емкость для дейтерия"]
