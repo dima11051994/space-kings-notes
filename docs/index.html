@@ -58,6 +58,7 @@
   .pill.danger { color: var(--danger); border-color: var(--danger); }
   .pill.ok { color: var(--gain); border-color: var(--gain); }
   .reminder { border-color: var(--warn); }
+  .changes { margin: 0; max-height: 14em; overflow: auto; font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; user-select: text; }
   .pager { justify-content: center; }
   button:disabled { opacity: .45; cursor: default; }
   .file-button { position: relative; display: inline-block; font-size: 15px; color: var(--fg); border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
@@ -103,6 +104,7 @@
       <label class="file-button">Из файла .txt<input type="file" id="report-file" accept=".txt,text/plain" class="visually-hidden"></label>
       <span class="status" id="report-status" role="status"></span>
     </div>
+    <pre class="changes num" id="report-changes" hidden></pre>
   </section>
 
   <section aria-labelledby="h-targets">

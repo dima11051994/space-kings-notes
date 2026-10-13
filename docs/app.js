@@ -282,39 +282,36 @@ function tick() {
 
 // ---- Отчёты и свои данные ----
 
-/** Добавить отчёты: по каждой планете остаётся самый свежий, пустые разделы берутся из сохранённого. */
+/**
+ * Добавить отчёты: по каждой планете остаётся самый свежий.
+ * Возвращает записи для сохранения и координаты с пометкой «добавлено» или «изменено».
+ */
 function mergeReports(reports) {
-  const put = [];
-  let added = 0, kept = 0;
+  const changes = new Map();
   // Старые отчёты раньше: в пакете может быть несколько отчётов по одной планете.
   for (const r of [...reports].sort((a, b) => a.time - b.time)) {
     const old = targets[r.coords];
     const merged = SK.mergeReport(old, r);
     if (!merged) continue;
-    if (!old) added++;
-    else if (merged !== r && ["fleet", "defense", "buildings", "research"].some(k => merged[k] !== r[k])) kept++;
+    if (!changes.has(r.coords)) changes.set(r.coords, old ? "изменено" : "добавлено");
     targets[r.coords] = merged;
-    put.push(merged);
   }
-  // Повторные отчёты по одной планете в пакете — одна запись.
-  return { put: [...new Map(put.map(r => [r.coords, targets[r.coords]])).values()], added, kept };
+  return { put: [...changes.keys()].map(c => targets[c]), changes };
 }
 
 function processReports(text) {
   const reports = SK.parseReports(text);
+  $("report-changes").hidden = true;
   if (!reports.length) {
     setStatus("report-status", "Не нашёл отчёт. Текст должен содержать «Шпионский доклад с … [г:с:п] от …».", "err");
     return false;
   }
-  const { put, added, kept } = mergeReports(reports);
-  const stale = reports.length - put.length;
-  setStatus("report-status", [
-    `Отчётов: ${reports.length}`,
-    `новых целей: ${added}`,
-    `обновлено: ${put.length - added}`,
-    kept ? `из них со старыми постройками, флотом и т. п.: ${kept}` : "",
-    stale ? `пропущено (есть отчёт новее или такой же): ${stale}` : "",
-  ].filter(Boolean).join(", ") + ".", put.length ? "ok" : "err");
+  const { put, changes } = mergeReports(reports);
+  const skipped = reports.length - put.length;
+  setStatus("report-status", `Отчётов: ${reports.length}, сохранено целей: ${put.length}`
+    + (skipped ? `, пропущено (есть отчёт новее, такой же или повтор в пакете): ${skipped}` : "") + ".", put.length ? "ok" : "err");
+  $("report-changes").textContent = [...changes].map(([c, mark]) => `${c} ${mark}`).join("\n");
+  $("report-changes").hidden = !changes.size;
   if (put.length) save({ put });
   return put.length > 0;
 }

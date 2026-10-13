@@ -30,14 +30,14 @@ const SK = (() => {
       const report = {
         planet, coords,
         time: new Date(+yyyy, +mm - 1, +dd, +h, +mi, +s).getTime(),
-        resources: {}, fleet: {}, defense: {}, buildings: {}, research: {},
+        resources: {},  // флот, оборона, постройки, исследования — только если раздел есть в отчёте
       };
       let section = "resources";
       for (const raw of body.split(/\r?\n/)) {
         const line = raw.trim();
         if (!line) continue;
         if (REPORT_END.test(line)) break;
-        if (SECTIONS[line]) { section = SECTIONS[line]; continue; }
+        if (SECTIONS[line]) { section = SECTIONS[line]; report[section] = {}; continue; }
         for (const [, name, value] of line.matchAll(PAIR)) {
           report[section][name.trim()] = Number(value.replace(/\./g, ""));
         }
@@ -48,16 +48,13 @@ const SK = (() => {
 
   /**
    * Новый отчёт поверх сохранённого; null, если сохранённый не старше.
-   * Пустые флот, оборона, постройки и исследования в новом отчёте значат «не видно»:
-   * берутся из сохранённого.
+   * Раздела (флот, оборона, постройки, исследования) нет в новом отчёте — берётся из сохранённого;
+   * раздел есть, но пустой — значит, там пусто.
    */
   function mergeReport(old, fresh) {
-    if (!old) return fresh;
-    if (old.time >= fresh.time) return null;
+    if (old && old.time >= fresh.time) return null;
     const merged = { ...fresh };
-    for (const k of DETAILS) {
-      if (!Object.keys(fresh[k] || {}).length && Object.keys(old[k] || {}).length) merged[k] = old[k];
-    }
+    for (const k of DETAILS) merged[k] = fresh[k] ?? old?.[k] ?? {};
     return merged;
   }
 
