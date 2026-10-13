@@ -6,6 +6,8 @@ const SK = (() => {
   // Конец отчёта в пакете: кнопки под отчётом и заголовок следующего сообщения.
   const REPORT_END = /^(Атаковать|Симулятор атаки|Ракетный симулятор|Шанс обнаружения|\d\d\.\d\d\.\d\d \d\d:\d\d:\d\d )/;
   const DETAILS = ["fleet", "defense", "buildings", "research"];
+  // Мало зондов: в отчёте только ресурсы, флот, оборона, постройки и исследования не видны.
+  const INCOMPLETE = /Отч[её]т неполный/;
 
   // Худшая (самая высокая) средняя температура по слоту: меньше всего дейтерия.
   const SLOT_TEMP = { 1: 260, 2: 210, 3: 160, 4: 110, 5: 100, 6: 90, 7: 80, 8: 70,
@@ -30,14 +32,17 @@ const SK = (() => {
       const report = {
         planet, coords,
         time: new Date(+yyyy, +mm - 1, +dd, +h, +mi, +s).getTime(),
-        resources: {},  // флот, оборона, постройки, исследования — только если раздел есть в отчёте
+        resources: {},
+        incomplete: INCOMPLETE.test(body),
       };
+      // Полный отчёт: раздел без строк — значит, там пусто. Неполный: разделов нет.
+      if (!report.incomplete) for (const k of DETAILS) report[k] = {};
       let section = "resources";
       for (const raw of body.split(/\r?\n/)) {
         const line = raw.trim();
         if (!line) continue;
         if (REPORT_END.test(line)) break;
-        if (SECTIONS[line]) { section = SECTIONS[line]; report[section] = {}; continue; }
+        if (SECTIONS[line]) { section = SECTIONS[line]; report[section] ??= {}; continue; }
         for (const [, name, value] of line.matchAll(PAIR)) {
           report[section][name.trim()] = Number(value.replace(/\./g, ""));
         }
@@ -48,13 +53,15 @@ const SK = (() => {
 
   /**
    * Новый отчёт поверх сохранённого; null, если сохранённый не старше.
-   * Раздела (флот, оборона, постройки, исследования) нет в новом отчёте — берётся из сохранённого;
-   * раздел есть, но пустой — значит, там пусто.
+   * Полный отчёт заменяет всё. Неполный обновляет время и ресурсы, а флот, оборону, постройки
+   * и исследования берёт из сохранённого; если сохранённого нет, они неизвестны (`detailsUnknown`).
    */
   function mergeReport(old, fresh) {
     if (old && old.time >= fresh.time) return null;
-    const merged = { ...fresh };
-    for (const k of DETAILS) merged[k] = fresh[k] ?? old?.[k] ?? {};
+    const { incomplete, ...merged } = fresh;
+    if (!incomplete) return { ...merged, detailsUnknown: false };
+    for (const k of DETAILS) merged[k] = old?.[k] ?? {};
+    merged.detailsUnknown = old ? !!old.detailsUnknown : true;
     return merged;
   }
 

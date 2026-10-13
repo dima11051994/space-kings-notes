@@ -135,13 +135,15 @@ function targetView(report, now) {
   const total = loot.reduce((a, b) => a + b, 0);
   return {
     report, prod, routes, best, arrival, atArrival, loot, total,
-    full: atArrival.map((v, i) => v >= prod.caps[i]),
+    // Уровни хранилищ неизвестны — не знаем, полон ли склад.
+    full: atArrival.map((v, i) => !report.detailsUnknown && v >= prod.caps[i]),
     guards: SK.guards(report),
     ships: best && SK.shipsNeeded(total, ship, best.dist, settings.speed),
   };
 }
 
-const guarded = v => v.guards.fleet + v.guards.defense > 0;
+// Защита неизвестна (только неполные отчёты) — не считаем цель открытой.
+const guarded = v => v.report.detailsUnknown || v.guards.fleet + v.guards.defense > 0;
 
 function unitTable(title, units) {
   const rows = Object.entries(units);
@@ -163,6 +165,7 @@ function card(v, now) {
     ...SK.RESOURCES.filter((_, i) => v.full[i]).map(n => `<span class="pill warn">склад полон: ${n.toLowerCase()}</span>`),
     v.guards.fleet ? `<span class="pill danger">флот ${fmt(v.guards.fleet)}</span>` : "",
     v.guards.defense ? `<span class="pill danger">оборона ${fmt(v.guards.defense)}</span>` : "",
+    v.report.detailsUnknown ? `<span class="pill warn">неполный отчёт: защита неизвестна</span>` : "",
     guarded(v) ? "" : `<span class="pill ok">без защиты</span>`,
   ].join(" ");
   const levels = [
