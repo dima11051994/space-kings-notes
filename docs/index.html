@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Space Kings Разведка</title>
+<meta name="theme-color" content="#11151c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  /* Одна колонка карточек целей, ниже — свои планеты, настройки и резервная копия. */
+  :root {
+    --bg: #f2f4f7; --surface: #ffffff; --line: #d9dee6;
+    --fg: #18202b; --muted: #5d6878; --accent: #1f6feb; --gain: #1a7f37; --warn: #b4540a; --danger: #c62828;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Roboto Mono", Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151c; --surface: #1a2029; --line: #2c3542;
+      --fg: #e6ebf2; --muted: #93a0b2; --accent: #6ea8fe; --gain: #4cc76a; --warn: #f0a24a; --danger: #ff6b6b;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--font); }
+  main { max-width: 640px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 48px; display: grid; gap: 28px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; }
+  section { display: grid; gap: 10px; min-width: 0; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 8px; min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row > .grow { flex: 1 1 140px; min-width: 0; }
+  .spread { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  textarea, input, select, button { font: inherit; color: var(--fg); }
+  textarea, input, select { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; width: 100%; min-width: 0; }
+  textarea { min-height: 110px; resize: vertical; font-family: var(--mono); font-size: 13px; }
+  label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  button { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--danger); }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .status { font-size: 14px; min-height: 1.4em; }
+  .status.ok { color: var(--gain); } .status.err { color: var(--danger); }
+  .coords { font-family: var(--mono); font-weight: 600; font-size: 17px; }
+  .loot { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 24px; font-weight: 700; }
+  .res { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .res div { display: grid; font-size: 12px; color: var(--muted); }
+  .res b { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 15px; color: var(--fg); font-weight: 600; }
+  .route { font-size: 14px; }
+  .pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.danger { color: var(--danger); border-color: var(--danger); }
+  .pill.ok { color: var(--gain); border-color: var(--gain); }
+  button.small { padding: 4px 10px; font-size: 13px; }
+  .item input { flex: 1 1 0; }
+  .item input.num { flex: 0 1 8em; }
+  input:not(:placeholder-shown):invalid { border-color: var(--danger); }
+  details summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  td { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .list { display: grid; gap: 6px; }
+  .item { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .empty { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="spread">
+    <h1>Space Kings Разведка</h1>
+    <span class="muted num" id="clock"></span>
+  </header>
+
+  <section aria-labelledby="h-add">
+    <h2 id="h-add">Шпионский отчёт</h2>
+    <textarea id="report-text" placeholder="Вставьте один или несколько отчётов: «Шпионский доклад с … [8:75:10] от …»"></textarea>
+    <div class="row">
+      <button class="primary" id="report-save">Сохранить отчёт</button>
+      <span class="status" id="report-status" role="status"></span>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-targets">
+    <h2 id="h-targets">Цели — добыча при прилёте</h2>
+    <div class="row">
+      <select id="filter" aria-label="Фильтр целей" style="width:auto"></select>
+      <span class="muted num" id="filter-count"></span>
+    </div>
+    <div class="list" id="targets"></div>
+  </section>
+
+  <section aria-labelledby="h-planets">
+    <h2 id="h-planets">Мои планеты</h2>
+    <div class="list" id="planets"></div>
+    <form class="row" id="planet-form">
+      <input class="grow" id="planet-coords" placeholder="8:306:4" inputmode="numeric" aria-label="Координаты" required>
+      <input class="grow" id="planet-name" placeholder="Название" aria-label="Название">
+      <button type="submit">Добавить</button>
+    </form>
+  </section>
+
+  <section aria-labelledby="h-settings">
+    <h2 id="h-settings">Флот и двигатели</h2>
+    <div class="grid3">
+      <label>Реактивный <input id="eng-combustion" type="number" min="0" inputmode="numeric"></label>
+      <label>Импульсный <input id="eng-impulse" type="number" min="0" inputmode="numeric"></label>
+      <label>Гиперпростр. <input id="eng-hyperspace" type="number" min="0" inputmode="numeric"></label>
+    </div>
+    <div class="grid3">
+      <label>Корабль <select id="ship"></select></label>
+      <label>Скорость <select id="speed"></select></label>
+      <label>Добыча, % <input id="loot" type="number" min="1" max="100" inputmode="numeric"></label>
+    </div>
+    <div class="list" id="ships"></div>
+    <div class="row"><button id="ship-add">Добавить корабль</button></div>
+  </section>
+
+  <section aria-labelledby="h-data">
+    <h2 id="h-data">Резервная копия</h2>
+    <p class="muted" style="margin:0;font-size:14px">Все данные хранятся только в этом браузере. Скопируйте JSON, чтобы перенести их или восстановить.</p>
+    <div class="row">
+      <button id="export">Показать JSON</button>
+      <button id="copy">Копировать</button>
+      <button id="import">Загрузить из поля</button>
+      <button class="danger" id="import-confirm" hidden>Заменить все данные</button>
+    </div>
+    <textarea id="data-text" placeholder="JSON резервной копии"></textarea>
+    <span class="status" id="data-status" role="status"></span>
+  </section>
+</main>
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
