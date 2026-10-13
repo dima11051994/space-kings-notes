@@ -80,8 +80,7 @@ const SK = (() => {
   const RESOURCES = ["Металл", "Кристалл", "Дейтерий"];
 
   /** Ресурсы на планете в момент `at` (мс). Рост останавливается на заполненном хранилище. */
-  function resourcesAt(report, at) {
-    const { rates, caps } = production(report);
+  function resourcesAt(report, at, { rates, caps } = production(report)) {
     const hours = Math.max(0, at - report.time) / 3.6e6;
     return RESOURCES.map((name, i) => {
       const start = report.resources[name] || 0;
@@ -89,13 +88,6 @@ const SK = (() => {
       return rate > 0 ? Math.max(start, Math.min(caps[i], start + rate * hours))
                       : Math.max(0, start + rate * hours);
     });
-  }
-
-  /** Заполнены ли хранилища (ресурс на уровне вместимости или выше) в момент `at`. */
-  function storageFull(report, at) {
-    const { caps } = production(report);
-    const amounts = resourcesAt(report, at);
-    return RESOURCES.map((_, i) => amounts[i] >= caps[i]);
   }
 
   /** Боевые единицы, которые помешают грабежу: флот и оборона без флагмана и ракет. */
@@ -148,7 +140,7 @@ const SK = (() => {
       .sort((a, b) => a.seconds - b.seconds);
   }
 
-  return { parseReports, parseCoords, production, resourcesAt, storageFull, guards, fuelPerShip, shipsNeeded,
+  return { parseReports, parseCoords, production, resourcesAt, guards, fuelPerShip, shipsNeeded,
            distance, shipSpeed, flightSeconds, routes, SLOT_TEMP, DRIVES, RESOURCES, HARMLESS };
 })();
 

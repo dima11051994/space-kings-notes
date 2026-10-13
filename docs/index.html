@@ -58,6 +58,11 @@
   .pill.danger { color: var(--danger); border-color: var(--danger); }
   .pill.ok { color: var(--gain); border-color: var(--gain); }
   .reminder { border-color: var(--warn); }
+  .pager { justify-content: center; }
+  button:disabled { opacity: .45; cursor: default; }
+  .file-button { position: relative; display: inline-block; font-size: 15px; color: var(--fg); border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+  .file-button:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
   button.small { padding: 4px 10px; font-size: 13px; }
   .item input { flex: 1 1 0; }
   .item input.num { flex: 0 1 8em; }
@@ -83,9 +88,9 @@
   <div class="card reminder" id="backup-reminder" role="status" hidden>
     <b>Пора сделать резервную копию</b>
     <span id="backup-age"></span>
-    <span class="muted" style="font-size:14px">Данные хранятся только в этом браузере. Скопируйте их и сохраните в заметках.</span>
+    <span class="muted" style="font-size:14px">Данные хранятся только в этом браузере. Скачайте файл копии и сохраните его вне телефона.</span>
     <div class="row">
-      <button class="primary" id="backup-now">Скопировать копию</button>
+      <button class="primary" id="backup-now">Скачать копию</button>
       <button id="backup-later">Напомнить завтра</button>
     </div>
   </div>
@@ -104,9 +109,15 @@
     <div class="row">
       <select id="filter" aria-label="Фильтр целей" style="width:auto"></select>
       <select id="sort" aria-label="Сортировка целей" style="width:auto"></select>
-      <span class="muted num" id="filter-count"></span>
+      <select id="page-size" aria-label="Целей на странице" style="width:auto"></select>
     </div>
+    <span class="muted num" id="filter-count"></span>
     <div class="list" id="targets"></div>
+    <nav class="row pager" id="pager" aria-label="Страницы целей" hidden>
+      <button id="page-prev">‹ Назад</button>
+      <select id="page" aria-label="Страница" style="width:auto"></select>
+      <button id="page-next">Вперёд ›</button>
+    </nav>
   </section>
 
   <section aria-labelledby="h-planets">
@@ -137,14 +148,16 @@
 
   <section aria-labelledby="h-data">
     <h2 id="h-data">Резервная копия</h2>
-    <p class="muted" style="margin:0;font-size:14px">Все данные хранятся только в этом браузере. Скопируйте JSON, чтобы перенести их или восстановить.</p>
+    <p class="muted" style="margin:0;font-size:14px">Все данные хранятся только в этом браузере. Копия — один файл JSON со всеми отчётами, планетами и настройками.</p>
     <div class="row">
-      <button id="export">Показать JSON</button>
-      <button id="copy">Копировать</button>
-      <button id="import">Загрузить из поля</button>
-      <button class="danger" id="import-confirm" hidden>Заменить все данные</button>
+      <button id="backup-download">Скачать файл</button>
+      <button id="backup-share" hidden>Отправить файл…</button>
+      <label class="file-button">Загрузить файл<input type="file" id="backup-file" accept=".json,application/json" class="visually-hidden"></label>
     </div>
-    <textarea id="data-text" placeholder="JSON резервной копии"></textarea>
+    <div class="row" id="import-actions" hidden>
+      <button class="primary" id="import-merge">Добавить отчёты из файла</button>
+      <button class="danger" id="import-replace">Заменить все данные</button>
+    </div>
     <span class="status" id="data-status" role="status"></span>
   </section>
 </main>
