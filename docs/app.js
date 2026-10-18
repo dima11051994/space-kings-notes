@@ -11,7 +11,10 @@ const DEFAULT_SETTINGS = {
   speed: 100,
   loot: 50,
   filter: "all", // all | open | guarded
-  sort: "loot",   // loot | coords
+  onlyFull: false,        // только с полным складом
+  onlyIncomplete: false,  // только с неизвестной защитой и постройками
+  sort: "loot",   // loot | lootOnly | coords | distance
+  distFrom: "",   // своя планета, от которой сортировать по расстоянию
   pageSize: 20,
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
@@ -22,11 +25,16 @@ const FILTERS = { all: "Все цели", open: "Без защиты", guarded: 
 const SORTS = {
   // Сначала планеты с полным складом: они простаивают. Дальше — по добыче.
   loot: { name: "По добыче", compare: (a, b) => (b.full.some(Boolean) - a.full.some(Boolean)) || b.total - a.total },
-  coords: { name: "По координатам", compare: (a, b) => {
-    const x = SK.parseCoords(a.report.coords), y = SK.parseCoords(b.report.coords);
-    return x.g - y.g || x.s - y.s || x.p - y.p;
-  } },
+  lootOnly: { name: "По добыче без учёта склада", compare: (a, b) => b.total - a.total },
+  coords: { name: "По координатам", compare: byCoords },
+  // Ближние раньше; без своих планет расстояния нет — по координатам.
+  distance: { name: "По расстоянию", compare: (a, b) => (a.dist ?? 0) - (b.dist ?? 0) || byCoords(a, b) },
 };
+
+function byCoords(a, b) {
+  const x = SK.parseCoords(a.report.coords), y = SK.parseCoords(b.report.coords);
+  return x.g - y.g || x.s - y.s || x.p - y.p;
+}
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -118,13 +126,18 @@ function setStatus(id, text, kind) {
   el.className = "status " + (kind || "");
 }
 
+/** Своя планета, от которой сортировать по расстоянию: выбранная или первая. */
+function distOrigin() {
+  return settings.planets.find(p => p.coords === settings.distFrom) || settings.planets[0];
+}
+
 function currentShip() {
   return settings.ships.find(s => s.id === settings.shipId) || settings.ships[0];
 }
 
 // ---- Цели ----
 
-function targetView(report, now) {
+function targetView(report, now, origin) {
   const ship = currentShip();
   const routes = SK.routes(report.coords, settings.planets, ship, settings.engines, settings.speed);
   const best = routes[0];
@@ -135,6 +148,7 @@ function targetView(report, now) {
   const total = loot.reduce((a, b) => a + b, 0);
   return {
     report, prod, routes, best, arrival, atArrival, loot, total,
+    dist: routes.find(rt => rt.from === origin)?.dist,
     // Уровни хранилищ неизвестны — не знаем, полон ли склад.
     full: atArrival.map((v, i) => !report.detailsUnknown && v >= prod.caps[i]),
     guards: SK.guards(report),
@@ -202,8 +216,11 @@ function card(v, now) {
 
 function renderTargets(now) {
   const all = Object.values(targets);
-  const views = all.map(r => targetView(r, now))
+  const origin = distOrigin();
+  const views = all.map(r => targetView(r, now, origin))
     .filter(v => settings.filter === "all" || (settings.filter === "guarded") === guarded(v))
+    .filter(v => !settings.onlyFull || v.full.some(Boolean))
+    .filter(v => !settings.onlyIncomplete || v.report.detailsUnknown)
     .sort((SORTS[settings.sort] || SORTS.loot).compare);
   const pages = Math.max(1, Math.ceil(views.length / settings.pageSize));
   page = Math.min(Math.max(1, page), pages);
@@ -220,7 +237,7 @@ function renderTargets(now) {
   $("page-next").disabled = page >= pages;
 
   $("targets").innerHTML = shown.length ? shown.map(v => card(v, now)).join("")
-    : all.length ? `<p class="empty">Нет целей для фильтра «${FILTERS[settings.filter]}».</p>`
+    : all.length ? `<p class="empty">Нет целей для выбранных фильтров.</p>`
     : `<p class="empty">${db ? "Пока нет отчётов. Вставьте шпионский доклад выше — здесь появится, сколько ресурсов вы заберёте и сколько лететь." : "Загрузка…"}</p>`;
 }
 
@@ -243,6 +260,13 @@ function renderSettings() {
   $("loot").value = settings.loot;
   $("filter").value = settings.filter;
   $("sort").value = settings.sort;
+  $("only-full").checked = settings.onlyFull;
+  $("only-incomplete").checked = settings.onlyIncomplete;
+  const origin = distOrigin();
+  $("dist-from").hidden = settings.sort !== "distance" || !origin;
+  $("dist-from").innerHTML = settings.planets.map(p =>
+    `<option value="${esc(p.coords)}">от ${esc(p.coords)}${p.name ? " " + esc(p.name) : ""}</option>`).join("");
+  if (origin) $("dist-from").value = origin.coords;
   $("page-size").value = settings.pageSize;
   const driveOptions = sel => Object.entries(SK.DRIVES)
     .map(([k, d]) => `<option value="${k}"${k === sel ? " selected" : ""}>${d.name}</option>`).join("");
@@ -369,6 +393,9 @@ $("loot").addEventListener("change", e => { settings.loot = Math.min(100, Math.m
 const view = patch => { Object.assign(settings, patch); page = 1; save({ changed: false }); };
 $("filter").addEventListener("change", e => view({ filter: e.target.value }));
 $("sort").addEventListener("change", e => view({ sort: e.target.value }));
+$("dist-from").addEventListener("change", e => view({ distFrom: e.target.value }));
+$("only-full").addEventListener("change", e => view({ onlyFull: e.target.checked }));
+$("only-incomplete").addEventListener("change", e => view({ onlyIncomplete: e.target.checked }));
 $("page-size").addEventListener("change", e => view({ pageSize: +e.target.value }));
 
 const goToPage = n => { page = n; tick(); $("h-targets").scrollIntoView({ block: "start" }); };

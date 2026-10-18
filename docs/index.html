@@ -25,6 +25,8 @@
     }
   }
   * { box-sizing: border-box; }
+  /* Иначе display у .card и .row перебивает атрибут hidden. */
+  [hidden] { display: none !important; }
   html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--font); }
   main { max-width: 640px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 48px; display: grid; gap: 28px; }
@@ -41,6 +43,8 @@
   textarea, input, select { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; width: 100%; min-width: 0; }
   textarea { min-height: 110px; resize: vertical; font-family: var(--mono); font-size: 13px; }
   label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  label.check { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--fg); cursor: pointer; }
+  label.check input { width: auto; margin: 0; accent-color: var(--accent); }
   button { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 9px 14px; cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.danger { color: var(--danger); }
@@ -112,7 +116,12 @@
     <div class="row">
       <select id="filter" aria-label="Фильтр целей" style="width:auto"></select>
       <select id="sort" aria-label="Сортировка целей" style="width:auto"></select>
+      <select id="dist-from" aria-label="Расстояние от своей планеты" style="width:auto" hidden></select>
       <select id="page-size" aria-label="Целей на странице" style="width:auto"></select>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="only-full"> Только с полным складом</label>
+      <label class="check"><input type="checkbox" id="only-incomplete"> Только неполная информация</label>
     </div>
     <span class="muted num" id="filter-count"></span>
     <div class="list" id="targets"></div>
