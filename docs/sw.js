@@ -11,7 +11,8 @@ self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
 self.addEventListener("fetch", e => {
   if (e.request.method !== "GET" || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    // no-cache: сверяться с сервером, иначе HTTP-кэш (10 мин у GitHub Pages) отдаёт старый app.js к новому index.html.
+    fetch(e.request, { cache: "no-cache" })
       .then(res => {
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy));
