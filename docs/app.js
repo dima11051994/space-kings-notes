@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   filter: "all", // all | open | guarded
   onlyFull: false,        // только с полным складом
   onlyIncomplete: false,  // только с неизвестной защитой и постройками
+  minLoot: 0,             // добыча от, тыс.; 0 — без ограничения
   sort: "loot",   // loot | lootOnly | coords | distance
   distFrom: "",   // своя планета, от которой сортировать по расстоянию
   pageSize: 20,
@@ -221,6 +222,7 @@ function renderTargets(now) {
     .filter(v => settings.filter === "all" || (settings.filter === "guarded") === guarded(v))
     .filter(v => !settings.onlyFull || v.full.some(Boolean))
     .filter(v => !settings.onlyIncomplete || v.report.detailsUnknown)
+    .filter(v => v.total >= settings.minLoot * 1000)
     .sort((SORTS[settings.sort] || SORTS.loot).compare);
   const pages = Math.max(1, Math.ceil(views.length / settings.pageSize));
   page = Math.min(Math.max(1, page), pages);
@@ -262,6 +264,7 @@ function renderSettings() {
   $("sort").value = settings.sort;
   $("only-full").checked = settings.onlyFull;
   $("only-incomplete").checked = settings.onlyIncomplete;
+  $("min-loot").value = settings.minLoot || "";
   const origin = distOrigin();
   $("dist-from").hidden = settings.sort !== "distance" || !origin;
   $("dist-from").innerHTML = settings.planets.map(p =>
@@ -396,6 +399,7 @@ $("sort").addEventListener("change", e => view({ sort: e.target.value }));
 $("dist-from").addEventListener("change", e => view({ distFrom: e.target.value }));
 $("only-full").addEventListener("change", e => view({ onlyFull: e.target.checked }));
 $("only-incomplete").addEventListener("change", e => view({ onlyIncomplete: e.target.checked }));
+$("min-loot").addEventListener("change", e => view({ minLoot: Math.max(0, +e.target.value || 0) }));
 $("page-size").addEventListener("change", e => view({ pageSize: +e.target.value }));
 
 const goToPage = n => { page = n; tick(); $("h-targets").scrollIntoView({ block: "start" }); };
