@@ -100,6 +100,30 @@ const SK = (() => {
     };
   }
 
+  // Ценность ресурсов в металле: 1 дейтерий = 2 кристалла = 4 металла.
+  const VALUE = [1, 2, 4];
+  // Стоимость 1-го уровня, рост стоимости за уровень, производство на уровне L и до какого уровня считать.
+  const MINES = [
+    { name: "Металл", res: 0, max: 45, cost: [60, 15, 0], factor: 1.5, prod: L => growth(L, 150) },
+    { name: "Кристалл", res: 1, max: 40, cost: [48, 24, 0], factor: 1.6, prod: L => growth(L, 100) },
+    { name: "Дейтерий", res: 2, max: 42, cost: [225, 75, 0], factor: 1.5,
+      prod: (L, temp) => growth(L, 50) * (1.36 - 0.004 * temp) },
+  ];
+
+  /**
+   * Уровни шахт от быстрой окупаемости к медленной: за сколько часов прирост от уровня
+   * вернёт его стоимость, всё в пересчёте на металл. Энергия не учитывается.
+   */
+  function minePayback(temp) {
+    return MINES.flatMap(m => Array.from({ length: m.max }, (_, i) => {
+      const level = i + 1;
+      const cost = m.cost.map(c => c * m.factor ** i);
+      const gain = m.prod(level, temp) - m.prod(level - 1, temp);
+      const value = cost.reduce((sum, c, r) => sum + c * VALUE[r], 0);
+      return { mine: m.name, level, cost, gain, hours: gain > 0 ? value / (gain * VALUE[m.res]) : Infinity };
+    })).sort((a, b) => a.hours - b.hours);
+  }
+
   const RESOURCES = ["Металл", "Кристалл", "Дейтерий"];
 
   /** Ресурсы на планете в момент `at` (мс). Рост останавливается на заполненном хранилище. */
@@ -163,7 +187,7 @@ const SK = (() => {
       .sort((a, b) => a.seconds - b.seconds);
   }
 
-  return { parseReports, mergeReport, parseCoords, production, resourcesAt, guards, fuelPerShip, shipsNeeded,
+  return { parseReports, mergeReport, parseCoords, production, minePayback, resourcesAt, guards, fuelPerShip, shipsNeeded,
            distance, shipSpeed, flightSeconds, routes, SLOT_TEMP, DRIVES, RESOURCES, HARMLESS };
 })();
 

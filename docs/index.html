@@ -81,6 +81,11 @@
   .list { display: grid; gap: 6px; }
   .item { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
   .empty { color: var(--muted); font-size: 14px; }
+  .mines th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 3px 6px 3px 0; border-bottom: 1px solid var(--line); }
+  .mines td { padding-right: 6px; }
+  .mines th:last-child, .mines td:last-child { padding-right: 0; text-align: right; }
+  .mines td:nth-child(1), .mines td:nth-child(3), .mines td:nth-child(4) { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .item input.temp { flex: 0 1 6em; }
 </style>
 </head>
 <body>
@@ -141,6 +146,22 @@
       <input class="grow" id="planet-name" placeholder="Название" aria-label="Название">
       <button type="submit">Добавить</button>
     </form>
+  </section>
+
+  <section aria-labelledby="h-mines">
+    <h2 id="h-mines">Шахты — окупаемость</h2>
+    <div class="row">
+      <select id="mines-planet" aria-label="Планета для расчёта шахт" style="width:auto"></select>
+      <button id="mines-toggle" aria-expanded="false" aria-controls="mines">Показать список</button>
+    </div>
+    <div id="mines" hidden>
+      <p class="muted" style="margin:0 0 8px;font-size:13px">Уровни от быстрой окупаемости к медленной: за сколько часов прирост от уровня вернёт его стоимость.
+        Ресурсы в пересчёте на металл: 1 дейтерий = 2 кристалла = 4 металла. Энергия не учитывается.</p>
+      <table class="mines">
+        <thead><tr><th>№</th><th>Шахта</th><th>Стоимость М / К</th><th>Прирост/ч</th><th>Окупаемость</th></tr></thead>
+        <tbody id="mines-body"></tbody>
+      </table>
+    </div>
   </section>
 
   <section aria-labelledby="h-settings">
