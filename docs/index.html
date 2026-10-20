@@ -84,8 +84,11 @@
   .mines th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 3px 6px 3px 0; border-bottom: 1px solid var(--line); }
   .mines td { padding-right: 6px; }
   .mines th:last-child, .mines td:last-child { padding-right: 0; text-align: right; }
-  .mines td:nth-child(1), .mines td:nth-child(3), .mines td:nth-child(4) { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  .item input.temp { flex: 0 1 6em; }
+  .mines td:nth-child(1), .mines td:nth-child(4) { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .planet { gap: 8px; padding: 10px; }
+  .planet .row input { flex: 1 1 0; }
+  .planet .row input.num { flex: 0 1 8em; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 </style>
 </head>
 <body>
@@ -151,14 +154,14 @@
   <section aria-labelledby="h-mines">
     <h2 id="h-mines">Шахты — окупаемость</h2>
     <div class="row">
-      <select id="mines-planet" aria-label="Планета для расчёта шахт" style="width:auto"></select>
-      <button id="mines-toggle" aria-expanded="false" aria-controls="mines">Показать список</button>
+      <button id="mines-toggle" aria-expanded="false" aria-controls="mines">Показать топ-20</button>
     </div>
     <div id="mines" hidden>
-      <p class="muted" style="margin:0 0 8px;font-size:13px">Уровни от быстрой окупаемости к медленной: за сколько часов прирост от уровня вернёт его стоимость.
+      <p class="muted" style="margin:0 0 8px;font-size:13px">Следующие уровни шахт на всех своих планетах, от быстрой окупаемости к медленной:
+        за сколько часов прирост от уровня вернёт его стоимость. Уровни шахт и температура — в «Моих планетах».
         Ресурсы в пересчёте на металл: 1 дейтерий = 2 кристалла = 4 металла. Энергия не учитывается.</p>
       <table class="mines">
-        <thead><tr><th>№</th><th>Шахта</th><th>Стоимость М / К</th><th>Прирост/ч</th><th>Окупаемость</th></tr></thead>
+        <thead><tr><th>№</th><th>Планета</th><th>Шахта</th><th>Стоимость М / К</th><th>Окупаемость</th></tr></thead>
         <tbody id="mines-body"></tbody>
       </table>
     </div>

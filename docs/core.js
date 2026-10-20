@@ -110,18 +110,25 @@ const SK = (() => {
       prod: (L, temp) => growth(L, 50) * (1.36 - 0.004 * temp) },
   ];
 
+  /** За сколько часов прирост от уровня вернёт его стоимость, всё в пересчёте на металл. */
+  function mineLevel(m, level, temp) {
+    const cost = m.cost.map(c => c * m.factor ** (level - 1));
+    const gain = m.prod(level, temp) - m.prod(level - 1, temp);
+    const value = cost.reduce((sum, c, r) => sum + c * VALUE[r], 0);
+    return { mine: m.name, level, cost, gain, hours: gain > 0 ? value / (gain * VALUE[m.res]) : Infinity };
+  }
+
   /**
-   * Уровни шахт от быстрой окупаемости к медленной: за сколько часов прирост от уровня
-   * вернёт его стоимость, всё в пересчёте на металл. Энергия не учитывается.
+   * Следующие уровни шахт на всех планетах, от быстрой окупаемости к медленной; энергия не учитывается.
+   * planets: [{levels: [металл, кристалл, дейтерий], temp}]. Окупаемость растёт с уровнем,
+   * поэтому уровень попадает в список только после предыдущего уровня той же шахты.
    */
-  function minePayback(temp) {
-    return MINES.flatMap(m => Array.from({ length: m.max }, (_, i) => {
-      const level = i + 1;
-      const cost = m.cost.map(c => c * m.factor ** i);
-      const gain = m.prod(level, temp) - m.prod(level - 1, temp);
-      const value = cost.reduce((sum, c, r) => sum + c * VALUE[r], 0);
-      return { mine: m.name, level, cost, gain, hours: gain > 0 ? value / (gain * VALUE[m.res]) : Infinity };
-    })).sort((a, b) => a.hours - b.hours);
+  function nextMines(planets, count) {
+    return planets.flatMap(p => MINES.flatMap((m, i) => {
+      const from = p.levels[i] || 0;
+      return Array.from({ length: Math.max(0, m.max - from) },
+        (_, k) => ({ planet: p, ...mineLevel(m, from + k + 1, p.temp) }));
+    })).sort((a, b) => a.hours - b.hours).slice(0, count);
   }
 
   const RESOURCES = ["Металл", "Кристалл", "Дейтерий"];
@@ -187,7 +194,7 @@ const SK = (() => {
       .sort((a, b) => a.seconds - b.seconds);
   }
 
-  return { parseReports, mergeReport, parseCoords, production, minePayback, resourcesAt, guards, fuelPerShip, shipsNeeded,
+  return { parseReports, mergeReport, parseCoords, production, nextMines, resourcesAt, guards, fuelPerShip, shipsNeeded,
            distance, shipSpeed, flightSeconds, routes, SLOT_TEMP, DRIVES, RESOURCES, HARMLESS };
 })();
 

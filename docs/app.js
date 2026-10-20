@@ -4,7 +4,9 @@ const DB_NAME = "space-kings-recon";
 const LEGACY_KEY = "space-kings-recon-v1";  // localStorage старых версий, переносится при первом запуске
 const MEGA = { id: "mega", name: "Мега транспорт", drive: "impulse", base: 7000, capacity: 350000, consumption: 100 };
 const DEFAULT_SETTINGS = {
-  planets: [],   // мои планеты: {coords, name, temp}; temp — средняя температура, null — худшая для слота
+  // мои планеты: {coords, name, metal, crystal, deut, temp}; metal, crystal, deut — уровни шахт,
+  // temp — средняя температура, null — худшая для слота
+  planets: [],
   engines: { combustion: 0, impulse: 0, hyperspace: 0 },
   ships: [MEGA],
   shipId: "mega",
@@ -17,8 +19,7 @@ const DEFAULT_SETTINGS = {
   sort: "loot",   // loot | lootOnly | coords | distance
   distFrom: "",   // своя планета, от которой сортировать по расстоянию
   pageSize: 20,
-  minesPlanet: "",  // своя планета для окупаемости шахт
-  minesOpen: false,
+  minesOpen: false,  // показан топ шахт
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
 const PAGE_SIZES = [10, 20, 50];
@@ -247,36 +248,44 @@ function renderTargets(now) {
 
 // ---- Мои данные ----
 
+// Уровни шахт своей планеты: поле в настройках и подпись.
+const MINE_FIELDS = [["metal", "Металл"], ["crystal", "Кристалл"], ["deut", "Дейтерий"]];
+
 function renderPlanets() {
   $("planets").innerHTML = settings.planets.length
-    ? settings.planets.map((p, i) => `<div class="item">
-        <input class="num" value="${esc(p.coords)}" data-planet="${i}" data-field="coords" aria-label="Координаты" inputmode="numeric">
-        <input value="${esc(p.name || "")}" data-planet="${i}" data-field="name" placeholder="Название" aria-label="Название">
-        <input class="num temp" type="number" step="any" value="${p.temp ?? ""}" data-planet="${i}" data-field="temp"
-          placeholder="${SK.SLOT_TEMP[SK.parseCoords(p.coords).p]} °C" aria-label="Средняя температура, °C" title="Средняя температура, °C. Пусто — худшая для слота">
-        <button class="danger" data-delete-planet="${i}" aria-label="Удалить ${esc(p.coords)}">Удалить</button></div>`).join("")
+    ? settings.planets.map((p, i) => `<div class="card planet">
+        <div class="row">
+          <input class="num" value="${esc(p.coords)}" data-planet="${i}" data-field="coords" aria-label="Координаты" inputmode="numeric">
+          <input value="${esc(p.name || "")}" data-planet="${i}" data-field="name" placeholder="Название" aria-label="Название">
+          <button class="danger" data-delete-planet="${i}" aria-label="Удалить ${esc(p.coords)}">Удалить</button>
+        </div>
+        <div class="grid4">
+          ${MINE_FIELDS.map(([f, name]) => `<label>${name} <input type="number" min="0" value="${p[f] || 0}"
+            data-planet="${i}" data-field="${f}" inputmode="numeric"></label>`).join("")}
+          <label>Темп., °C <input type="number" step="any" value="${p.temp ?? ""}" data-planet="${i}" data-field="temp"
+            placeholder="${SK.SLOT_TEMP[SK.parseCoords(p.coords).p]}" title="Средняя температура. Пусто — худшая для слота"></label>
+        </div></div>`).join("")
     : `<p class="empty">Добавьте планеты, с которых летаете: время полёта считается от ближайшей.</p>`;
 }
 
-// Пустая температура — худшая для слота, как у целей.
-const planetTemp = p => p.temp ?? SK.SLOT_TEMP[SK.parseCoords(p.coords).p];
 const hours = h => !isFinite(h) ? "—" : h < 48 ? h.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + " ч"
   : `${fmt(h / 24)} д ${Math.floor(h % 24)} ч`;
 
 function renderMines() {
-  const planet = settings.planets.find(p => p.coords === settings.minesPlanet) || settings.planets[0];
-  $("mines-planet").innerHTML = settings.planets.map(p =>
-    `<option value="${esc(p.coords)}">${esc(p.coords)}${p.name ? " " + esc(p.name) : ""} · ${planetTemp(p)} °C</option>`).join("");
-  $("mines-planet").hidden = !planet;
-  if (planet) $("mines-planet").value = planet.coords;
-  $("mines-toggle").textContent = settings.minesOpen ? "Скрыть список" : "Показать список";
+  $("mines-toggle").textContent = settings.minesOpen ? "Скрыть топ-20" : "Показать топ-20";
   $("mines-toggle").setAttribute("aria-expanded", settings.minesOpen);
   $("mines").hidden = !settings.minesOpen;
   if (!settings.minesOpen) return;
-  $("mines-body").innerHTML = planet
-    ? SK.minePayback(planetTemp(planet)).map((r, i) => `<tr><td>${i + 1}</td><td>${r.mine} ${r.level}</td>
-        <td>${fmtShort(r.cost[0])} / ${fmtShort(r.cost[1])}</td><td>+${fmtShort(r.gain)}</td><td>${hours(r.hours)}</td></tr>`).join("")
-    : `<tr><td colspan="5" class="empty">Добавьте свою планету выше: от её температуры зависит дейтерий.</td></tr>`;
+  // Пустая температура — худшая для слота, как у целей.
+  const planets = settings.planets.map(p => ({
+    label: p.name || p.coords,
+    levels: MINE_FIELDS.map(([f]) => p[f] || 0),
+    temp: p.temp ?? SK.SLOT_TEMP[SK.parseCoords(p.coords).p],
+  }));
+  $("mines-body").innerHTML = planets.length
+    ? SK.nextMines(planets, 20).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.planet.label)}</td><td>${r.mine} ${r.level}</td>
+        <td>${fmtShort(r.cost[0])} / ${fmtShort(r.cost[1])}</td><td>${hours(r.hours)}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">Добавьте свои планеты ниже, с уровнями шахт и температурой.</td></tr>`;
 }
 
 function renderSettings() {
@@ -402,7 +411,8 @@ document.addEventListener("change", e => {
       el.reportValidity();
       return;
     }
-    settings.planets[+el.dataset.planet][field] = field === "temp" ? (value === "" ? null : +value) : value;
+    settings.planets[+el.dataset.planet][field] = field === "temp" ? (value === "" ? null : +value)
+      : MINE_FIELDS.some(([f]) => f === field) ? Math.max(0, Math.floor(+value || 0)) : value;
     save();
   } else if (el.dataset.ship) {
     const ship = settings.ships.find(s => s.id === el.dataset.ship);
@@ -427,7 +437,6 @@ $("only-full").addEventListener("change", e => view({ onlyFull: e.target.checked
 $("only-incomplete").addEventListener("change", e => view({ onlyIncomplete: e.target.checked }));
 $("min-loot").addEventListener("change", e => view({ minLoot: Math.max(0, +e.target.value || 0) }));
 $("page-size").addEventListener("change", e => view({ pageSize: +e.target.value }));
-$("mines-planet").addEventListener("change", e => { settings.minesPlanet = e.target.value; save({ changed: false }); });
 $("mines-toggle").addEventListener("click", () => { settings.minesOpen = !settings.minesOpen; save({ changed: false }); });
 
 const goToPage = n => { page = n; tick(); $("h-targets").scrollIntoView({ block: "start" }); };
