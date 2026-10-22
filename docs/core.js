@@ -53,13 +53,17 @@ const SK = (() => {
 
   /**
    * Новый отчёт поверх сохранённого; null, если сохранённый не старше.
-   * Полный отчёт заменяет всё. Неполный обновляет время и ресурсы, а флот, оборону, постройки
+   * Полный отчёт заменяет всё, кроме исследований, если их в нём не видно. Неполный обновляет время и ресурсы, а флот, оборону, постройки
    * и исследования берёт из сохранённого; если сохранённого нет, они неизвестны (`detailsUnknown`).
    */
   function mergeReport(old, fresh) {
     if (old && old.time >= fresh.time) return null;
     const { incomplete, ...merged } = fresh;
-    if (!incomplete) return { ...merged, detailsUnknown: false };
+    if (!incomplete) {
+      // Исследований не видно (мало зондов) — оставляем прежние: технологии со временем не падают.
+      if (!Object.keys(merged.research).length && old?.research) merged.research = old.research;
+      return { ...merged, detailsUnknown: false };
+    }
     for (const k of DETAILS) merged[k] = old?.[k] ?? {};
     merged.detailsUnknown = old ? !!old.detailsUnknown : true;
     return merged;

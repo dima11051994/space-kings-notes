@@ -1,5 +1,5 @@
 // Интерфейс. Данные — в IndexedDB этого браузера: каждый отчёт отдельной записью, настройки — одной.
-// Расчёты — core.js.
+// Расчёты — core.js, бой и звёзды смерти — battle.js (в фоне, ds-worker.js).
 const DB_NAME = "space-kings-recon";
 const LEGACY_KEY = "space-kings-recon-v1";  // localStorage старых версий, переносится при первом запуске
 const MEGA = { id: "mega", name: "Мега транспорт", drive: "impulse", base: 7000, capacity: 350000, consumption: 100 };
@@ -8,6 +8,8 @@ const DEFAULT_SETTINGS = {
   // temp — средняя температура, null — худшая для слота
   planets: [],
   engines: { combustion: 0, impulse: 0, hyperspace: 0 },
+  techs: {},        // мои боевые исследования {название: уровень}; реактивный двигатель — из engines
+  premium: false,   // премиум-атакер: +50% к атаке, щитам и броне моих кораблей
   ships: [MEGA],
   shipId: "mega",
   speed: 100,
@@ -63,6 +65,7 @@ function normalizeSettings(saved) {
   // Корабли из старых версий: без трюма и расхода топлива.
   s.ships = s.ships.map(ship => ({ ...(ship.id === "mega" ? MEGA : { capacity: 0, consumption: 0 }), ...ship }));
   s.backup = { ...DEFAULT_SETTINGS.backup, ...s.backup };
+  s.techs = { ...s.techs };
   if (!s.backup.at) s.backup.at = Date.now();  // отсчёт — с первого запуска
   if (!PAGE_SIZES.includes(s.pageSize)) s.pageSize = DEFAULT_SETTINGS.pageSize;
   return s;
@@ -160,6 +163,46 @@ function targetView(report, now, origin) {
   };
 }
 
+// ---- Звёзды смерти для сноса ----
+
+// Исследования, которые вводятся в настройках: всё боевое, кроме реактивного двигателя (он в «Двигателях»).
+const MY_TECHS = BATTLE.TECHS.filter(t => t !== "Реактивный двигатель");
+const myTechs = () => ({ ...settings.techs, "Реактивный двигатель": settings.engines.combustion || 0 });
+const dsResults = new Map();  // ключ расчёта → число ЗС; null — не посчитать; undefined у has() — в очереди
+let dsWorker = null, dsRedraw = 0;
+
+/** Защитники цели (флот и оборона без флагмана и ракет) и её технологии: из отчёта или, если их там нет, мои. */
+function dsTask(report) {
+  if (report.detailsUnknown) return null;
+  const side = {};
+  for (const sec of [report.defense, report.fleet])
+    for (const [n, k] of Object.entries(sec)) if (k > 0 && !SK.HARMLESS.has(n)) side[n] = k;
+  if (!Object.keys(side).length) return null;
+  const own = !Object.keys(report.research || {}).length;
+  // Премиума у цели не бывает.
+  const def = { techs: own ? myTechs() : Object.fromEntries(BATTLE.TECHS.map(t => [t, report.research[t] || 0])) };
+  const att = { techs: myTechs(), premium: settings.premium };
+  return { side, att, def, own, key: JSON.stringify([report.coords, report.time, att, def.techs]) };
+}
+
+/** Число ЗС с запасом 5%: из кэша или поставить в очередь фонового расчёта (тогда undefined). */
+function deathStars(task) {
+  if (dsResults.has(task.key)) return dsResults.get(task.key);
+  if (typeof Worker === "undefined") return null;
+  if (!dsWorker) {
+    dsWorker = new Worker("ds-worker.js");
+    dsWorker.onmessage = ({ data }) => {
+      dsResults.set(data.key, data.n);
+      // Ответы приходят пачкой — перерисовать один раз.
+      clearTimeout(dsRedraw);
+      dsRedraw = setTimeout(() => renderTargets(Date.now()), 200);
+    };
+  }
+  dsResults.set(task.key, undefined);
+  dsWorker.postMessage({ key: task.key, side: task.side, att: task.att, def: task.def });
+  return undefined;
+}
+
 // Защита неизвестна (только неполные отчёты) — не считаем цель открытой.
 const guarded = v => v.report.detailsUnknown || v.guards.fleet + v.guards.defense > 0;
 
@@ -172,6 +215,12 @@ function unitTable(title, units) {
 
 function card(v, now) {
   const r = v.report, p = v.prod, b = r.buildings, ship = currentShip();
+  const task = dsTask(r), ds = task && deathStars(task);
+  const dsLine = !task ? ""
+    : `Звёзд смерти для сноса: ${ds === undefined ? '<span class="muted">считаю…</span>'
+      : ds === null ? '<span class="muted">не посчитать</span>' : ds === Infinity ? "больше 4 096" : `<b class="num">${fmt(ds)}</b>`}`
+      + ` <span class="muted">(+5%${task.own ? ", технологии цели — мои: в отчёте их нет" : ""})</span>`;
+  const t = task?.def.techs;
   const route = v.best
     ? `из <b class="num">${esc(v.best.from.coords)}</b>${v.best.from.name ? " " + esc(v.best.from.name) : ""} · <b class="num">${duration(v.best.seconds)}</b> · прилёт <b class="num">${clock(v.arrival)}</b>`
     : `<span class="pill warn">Добавьте свою планету, чтобы считать полёт</span>`;
@@ -201,6 +250,7 @@ function card(v, now) {
     <div class="res">${SK.RESOURCES.map((n, i) => `<div>${n}<b>${fmt(v.loot[i])}</b></div>`).join("")}</div>
     <div class="route">${route}</div>
     ${cargo ? `<div class="route">${cargo}</div>` : ""}
+    ${dsLine ? `<div class="route">${dsLine}</div>` : ""}
     <details data-coords="${esc(r.coords)}"${openDetails.has(r.coords) ? " open" : ""}>
       <summary>Расчёт и отчёт</summary>
       <table>
@@ -211,6 +261,7 @@ function card(v, now) {
         ${levels.map(([n, l]) => `<tr><td>${n}</td><td>${l ?? "—"}</td></tr>`).join("")}
         ${v.ships && v.ships.count !== Infinity ? `<tr><td>Свободно в трюме одного корабля</td><td>${fmt(v.ships.free)}</td></tr>` : ""}
         ${v.routes.map(rt => `<tr><td>Полёт из ${esc(rt.from.coords)}${rt.from.name ? " " + esc(rt.from.name) : ""}</td><td>${duration(rt.seconds)}</td></tr>`).join("")}
+        ${t ? `<tr><td>Технологии цели${task.own ? " (мои)" : ""}: оружие / щиты / броня</td><td>${t["Оружейная технология"]} / ${t["Щитовая технология"]} / ${t["Броня космических кораблей"]}</td></tr>` : ""}
         ${unitTable("Флот", r.fleet)}
         ${unitTable("Оборона", r.defense)}
       </table>
@@ -305,6 +356,9 @@ function renderSettings() {
     `<option value="${esc(p.coords)}">от ${esc(p.coords)}${p.name ? " " + esc(p.name) : ""}</option>`).join("");
   if (origin) $("dist-from").value = origin.coords;
   $("page-size").value = settings.pageSize;
+  $("techs").innerHTML = MY_TECHS.map(t => `<label>${t.replace(/ (технология|космических кораблей)$/, "")}
+    <input type="number" min="0" value="${settings.techs[t] || 0}" data-tech="${t}" inputmode="numeric"></label>`).join("");
+  $("premium").checked = settings.premium;
   const driveOptions = sel => Object.entries(SK.DRIVES)
     .map(([k, d]) => `<option value="${k}"${k === sel ? " selected" : ""}>${d.name}</option>`).join("");
   $("ships").innerHTML = settings.ships.map(s => `<div class="card ship">
@@ -414,6 +468,9 @@ document.addEventListener("change", e => {
     settings.planets[+el.dataset.planet][field] = field === "temp" ? (value === "" ? null : +value)
       : MINE_FIELDS.some(([f]) => f === field) ? Math.max(0, Math.floor(+value || 0)) : value;
     save();
+  } else if (el.dataset.tech) {
+    settings.techs[el.dataset.tech] = Math.max(0, Math.floor(+el.value || 0));
+    save();
   } else if (el.dataset.ship) {
     const ship = settings.ships.find(s => s.id === el.dataset.ship);
     ship[field] = ["base", "capacity", "consumption"].includes(field) ? Math.max(0, +el.value || 0) : el.value.trim();
@@ -425,6 +482,7 @@ for (const d of Object.keys(SK.DRIVES)) {
   $("eng-" + d).addEventListener("change", e => { settings.engines[d] = Math.max(0, +e.target.value || 0); save(); });
 }
 $("ship").addEventListener("change", e => { settings.shipId = e.target.value; save(); });
+$("premium").addEventListener("change", e => { settings.premium = e.target.checked; save(); });
 $("speed").addEventListener("change", e => { settings.speed = +e.target.value; save(); });
 $("loot").addEventListener("change", e => { settings.loot = Math.min(100, Math.max(1, +e.target.value || 50)); save(); });
 

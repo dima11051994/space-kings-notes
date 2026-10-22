@@ -183,6 +183,14 @@
     <div class="row"><button id="ship-add">Добавить корабль</button></div>
   </section>
 
+  <section aria-labelledby="h-techs">
+    <h2 id="h-techs">Мои технологии</h2>
+    <p class="muted" style="margin:0;font-size:14px">Для расчёта звёзд смерти на карточках целей. Реактивный двигатель берётся из «Флота и двигателей».
+      Технологии цели — из её отчёта, а если их там нет, считаются равными моим (без премиума).</p>
+    <div class="grid3" id="techs"></div>
+    <label class="check"><input type="checkbox" id="premium"> Премиум-атакер (+50% к атаке, щитам и броне моих кораблей)</label>
+  </section>
+
   <section aria-labelledby="h-data">
     <h2 id="h-data">Резервная копия</h2>
     <p class="muted" style="margin:0;font-size:14px">Все данные хранятся только в этом браузере. Копия — один файл JSON со всеми отчётами, планетами и настройками.</p>
@@ -199,6 +207,7 @@
   </section>
 </main>
 <script src="core.js"></script>
+<script src="battle.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
