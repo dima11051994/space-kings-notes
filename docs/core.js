@@ -106,6 +106,8 @@ const SK = (() => {
 
   // Ценность ресурсов в металле: 1 дейтерий = 2 кристалла = 4 металла.
   const VALUE = [1, 2, 4];
+  /** Ресурсы [металл, кристалл, дейтерий] в пересчёте на дейтерий. */
+  const inDeut = amounts => amounts.reduce((sum, a, r) => sum + a * VALUE[r], 0) / VALUE[2];
   // Стоимость 1-го уровня, рост стоимости за уровень, производство на уровне L и до какого уровня считать.
   const MINES = [
     { name: "Металл", res: 0, max: 45, cost: [60, 15, 0], factor: 1.5, prod: L => growth(L, 150) },
@@ -118,12 +120,13 @@ const SK = (() => {
   function mineLevel(m, level, temp) {
     const cost = m.cost.map(c => c * m.factor ** (level - 1));
     const gain = m.prod(level, temp) - m.prod(level - 1, temp);
-    const value = cost.reduce((sum, c, r) => sum + c * VALUE[r], 0);
-    return { mine: m.name, level, cost, gain, hours: gain > 0 ? value / (gain * VALUE[m.res]) : Infinity };
+    const deut = inDeut(cost);
+    return { mine: m.name, level, cost, deut, gain, hours: gain > 0 ? deut * VALUE[2] / (gain * VALUE[m.res]) : Infinity };
   }
 
   /**
    * Следующие уровни шахт на всех планетах, от быстрой окупаемости к медленной; энергия не учитывается.
+   * deut — стоимость уровня в пересчёте на дейтерий.
    * planets: [{levels: [металл, кристалл, дейтерий], temp}]. Окупаемость растёт с уровнем,
    * поэтому уровень попадает в список только после предыдущего уровня той же шахты.
    */
@@ -198,7 +201,7 @@ const SK = (() => {
       .sort((a, b) => a.seconds - b.seconds);
   }
 
-  return { parseReports, mergeReport, parseCoords, production, nextMines, resourcesAt, guards, fuelPerShip, shipsNeeded,
+  return { parseReports, mergeReport, parseCoords, production, nextMines, inDeut, resourcesAt, guards, fuelPerShip, shipsNeeded,
            distance, shipSpeed, flightSeconds, routes, SLOT_TEMP, DRIVES, RESOURCES, HARMLESS };
 })();
 

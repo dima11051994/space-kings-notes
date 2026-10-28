@@ -84,7 +84,7 @@
   .mines th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 3px 6px 3px 0; border-bottom: 1px solid var(--line); }
   .mines td { padding-right: 6px; }
   .mines th:last-child, .mines td:last-child { padding-right: 0; text-align: right; }
-  .mines td:nth-child(1), .mines td:nth-child(4) { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .mines td:nth-child(1), .mines td:nth-child(4), .mines td:nth-child(5) { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .planet { gap: 8px; padding: 10px; }
   .planet .row input { flex: 1 1 0; }
   .planet .row input.num { flex: 0 1 8em; }
@@ -131,6 +131,7 @@
       <label class="check"><input type="checkbox" id="only-full"> Только с полным складом</label>
       <label class="check"><input type="checkbox" id="only-incomplete"> Только неполная информация</label>
       <label class="check">Добыча от <input type="number" id="min-loot" class="num" min="0" step="any" inputmode="decimal" placeholder="0" style="width:7em"> тыс.</label>
+      <label class="check">В дейтерии от <input type="number" id="min-deut" class="num" min="0" step="any" inputmode="decimal" placeholder="0" style="width:7em"> тыс.</label>
     </div>
     <span class="muted num" id="filter-count"></span>
     <div class="list" id="targets"></div>
@@ -161,7 +162,7 @@
         за сколько часов прирост от уровня вернёт его стоимость. Уровни шахт и температура — в «Моих планетах».
         Ресурсы в пересчёте на металл: 1 дейтерий = 2 кристалла = 4 металла. Энергия не учитывается.</p>
       <table class="mines">
-        <thead><tr><th>№</th><th>Планета</th><th>Шахта</th><th>Стоимость М / К</th><th>Окупаемость</th></tr></thead>
+        <thead><tr><th>№</th><th>Планета</th><th>Шахта</th><th>Стоимость М / К</th><th>В дейтерии</th><th>Окупаемость</th></tr></thead>
         <tbody id="mines-body"></tbody>
       </table>
     </div>

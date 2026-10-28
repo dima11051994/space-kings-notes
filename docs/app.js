@@ -18,7 +18,8 @@ const DEFAULT_SETTINGS = {
   onlyFull: false,        // только с полным складом
   onlyIncomplete: false,  // только с неизвестной защитой и постройками
   minLoot: 0,             // добыча от, тыс.; 0 — без ограничения
-  sort: "loot",   // loot | lootOnly | coords | distance
+  minDeut: 0,             // добыча в пересчёте на дейтерий от, тыс.; 0 — без ограничения
+  sort: "loot",   // loot | lootOnly | deut | coords | distance
   distFrom: "",   // своя планета, от которой сортировать по расстоянию
   pageSize: 20,
   minesOpen: false,  // показан топ шахт
@@ -32,6 +33,7 @@ const SORTS = {
   // Сначала планеты с полным складом: они простаивают. Дальше — по добыче.
   loot: { name: "По добыче", compare: (a, b) => (b.full.some(Boolean) - a.full.some(Boolean)) || b.total - a.total },
   lootOnly: { name: "По добыче без учёта склада", compare: (a, b) => b.total - a.total },
+  deut: { name: "По добыче в дейтерии", compare: (a, b) => b.deut - a.deut },
   coords: { name: "По координатам", compare: byCoords },
   // Ближние раньше; без своих планет расстояния нет — по координатам.
   distance: { name: "По расстоянию", compare: (a, b) => (a.dist ?? 0) - (b.dist ?? 0) || byCoords(a, b) },
@@ -155,6 +157,7 @@ function targetView(report, now, origin) {
   const total = loot.reduce((a, b) => a + b, 0);
   return {
     report, prod, routes, best, arrival, atArrival, loot, total,
+    deut: SK.inDeut(loot),  // добыча в пересчёте на дейтерий: 4 металла = 2 кристалла = 1 дейтерий
     dist: routes.find(rt => rt.from === origin)?.dist,
     // Уровни хранилищ неизвестны — не знаем, полон ли склад.
     full: atArrival.map((v, i) => !report.detailsUnknown && v >= prod.caps[i]),
@@ -246,7 +249,7 @@ function card(v, now) {
       <button class="small danger" data-delete-target="${esc(r.coords)}">Удалить</button>
     </div>
     <div class="muted" style="font-size:13px">отчёт ${dateTime(r.time)}, ${age(now - r.time)} назад</div>
-    <div class="spread"><span class="loot">${fmtShort(v.total)}</span><span>${pills}</span></div>
+    <div class="spread"><span><span class="loot">${fmtShort(v.total)}</span> <span class="muted num">≈ ${fmtShort(v.deut)} дейт.</span></span><span>${pills}</span></div>
     <div class="res">${SK.RESOURCES.map((n, i) => `<div>${n}<b>${fmt(v.loot[i])}</b></div>`).join("")}</div>
     <div class="route">${route}</div>
     ${cargo ? `<div class="route">${cargo}</div>` : ""}
@@ -277,6 +280,7 @@ function renderTargets(now) {
     .filter(v => !settings.onlyFull || v.full.some(Boolean))
     .filter(v => !settings.onlyIncomplete || v.report.detailsUnknown)
     .filter(v => v.total >= settings.minLoot * 1000)
+    .filter(v => v.deut >= settings.minDeut * 1000)
     .sort((SORTS[settings.sort] || SORTS.loot).compare);
   const pages = Math.max(1, Math.ceil(views.length / settings.pageSize));
   page = Math.min(Math.max(1, page), pages);
@@ -335,8 +339,8 @@ function renderMines() {
   }));
   $("mines-body").innerHTML = planets.length
     ? SK.nextMines(planets, 20).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.planet.label)}</td><td>${r.mine} ${r.level}</td>
-        <td>${fmtShort(r.cost[0])} / ${fmtShort(r.cost[1])}</td><td>${hours(r.hours)}</td></tr>`).join("")
-    : `<tr><td colspan="5" class="empty">Добавьте свои планеты ниже, с уровнями шахт и температурой.</td></tr>`;
+        <td>${fmtShort(r.cost[0])} / ${fmtShort(r.cost[1])}</td><td>${fmtShort(r.deut)}</td><td>${hours(r.hours)}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">Добавьте свои планеты ниже, с уровнями шахт и температурой.</td></tr>`;
 }
 
 function renderSettings() {
@@ -350,6 +354,7 @@ function renderSettings() {
   $("only-full").checked = settings.onlyFull;
   $("only-incomplete").checked = settings.onlyIncomplete;
   $("min-loot").value = settings.minLoot || "";
+  $("min-deut").value = settings.minDeut || "";
   const origin = distOrigin();
   $("dist-from").hidden = settings.sort !== "distance" || !origin;
   $("dist-from").innerHTML = settings.planets.map(p =>
@@ -494,6 +499,7 @@ $("dist-from").addEventListener("change", e => view({ distFrom: e.target.value }
 $("only-full").addEventListener("change", e => view({ onlyFull: e.target.checked }));
 $("only-incomplete").addEventListener("change", e => view({ onlyIncomplete: e.target.checked }));
 $("min-loot").addEventListener("change", e => view({ minLoot: Math.max(0, +e.target.value || 0) }));
+$("min-deut").addEventListener("change", e => view({ minDeut: Math.max(0, +e.target.value || 0) }));
 $("page-size").addEventListener("change", e => view({ pageSize: +e.target.value }));
 $("mines-toggle").addEventListener("click", () => { settings.minesOpen = !settings.minesOpen; save({ changed: false }); });
 
