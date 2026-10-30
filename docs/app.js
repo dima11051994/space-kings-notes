@@ -1,5 +1,5 @@
 // Интерфейс. Данные — в IndexedDB этого браузера: каждый отчёт отдельной записью, настройки — одной.
-// Расчёты — core.js, бой и звёзды смерти — battle.js (в фоне, ds-worker.js).
+// Расчёты — core.js, бой и звёзды смерти — battle.js (в фоне, ds-worker.js), подбор атаки — attack.js (в фоне, attack-worker.js).
 const DB_NAME = "space-kings-recon";
 const LEGACY_KEY = "space-kings-recon-v1";  // localStorage старых версий, переносится при первом запуске
 const MEGA = { id: "mega", name: "Мега транспорт", drive: "impulse", base: 7000, capacity: 350000, consumption: 100 };
@@ -23,6 +23,9 @@ const DEFAULT_SETTINGS = {
   distFrom: "",   // своя планета, от которой сортировать по расстоянию
   pageSize: 20,
   minesOpen: false,  // показан топ шахт
+  attackOpen: false, // показан подбор атаки
+  attackFrom: "",    // своя планета, с которой лететь в подборе атаки
+  attackDs: true,    // подбирать составы со звёздами смерти
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
 const PAGE_SIZES = [10, 20, 50];
@@ -343,6 +346,143 @@ function renderMines() {
     : `<tr><td colspan="6" class="empty">Добавьте свои планеты ниже, с уровнями шахт и температурой.</td></tr>`;
 }
 
+// ---- Подбор атаки ----
+
+// Поля юнитов цели: оборона и корабли.
+const ATTACK_DEFENSE = Object.keys(BATTLE.UNITS).filter(n => ATTACK.DEFENSE.has(n));
+const ATTACK_FLEET = Object.keys(BATTLE.UNITS).filter(n => !ATTACK.DEFENSE.has(n));
+let attackTechs = null;   // технологии цели из отчёта; null — считаем равными моим
+let attackWorker = null;  // идёт подбор
+let attackTop = null;     // результат последнего подбора
+
+/** Своя планета, с которой лететь: выбранная или первая. */
+const attackOrigin = () => settings.planets.find(p => p.coords === settings.attackFrom) || settings.planets[0];
+
+function renderAttack() {
+  $("attack-toggle").textContent = settings.attackOpen ? "Скрыть" : "Показать";
+  $("attack-toggle").setAttribute("aria-expanded", settings.attackOpen);
+  $("attack").hidden = !settings.attackOpen;
+  $("attack-from").innerHTML = settings.planets.length
+    ? settings.planets.map(p => `<option value="${esc(p.coords)}">${esc(p.coords)}${p.name ? " " + esc(p.name) : ""}</option>`).join("")
+    : `<option value="">Добавьте свои планеты</option>`;
+  $("attack-from").value = attackOrigin()?.coords ?? "";
+  $("attack-ds").checked = settings.attackDs;
+}
+
+function attackUnitFields() {
+  const field = n => `<label>${esc(n)} <input type="number" min="0" class="num" data-attack-unit="${esc(n)}" inputmode="numeric" placeholder="0"></label>`;
+  $("attack-defense").innerHTML = ATTACK_DEFENSE.map(field).join("");
+  $("attack-fleet").innerHTML = ATTACK_FLEET.map(field).join("");
+}
+
+function renderAttackTechs() {
+  const t = attackTechs;
+  $("attack-techs").textContent = t
+    ? `Технологии цели из отчёта: оружие ${t["Оружейная технология"]}, щиты ${t["Щитовая технология"]}, броня ${t["Броня космических кораблей"]}.`
+    : "Технологии цели считаются равными моим (без премиума).";
+}
+
+/** Заполнить поля из вставленного отчёта; флот и оборону неполного отчёта берём из сохранённого по этой цели. */
+function fillAttack() {
+  const [fresh] = SK.parseReports($("attack-report").value);
+  if (!fresh) { setStatus("attack-fill-status", "Не нашёл отчёт: нужен текст «Шпионский доклад с … [г:с:п] от …».", "err"); return; }
+  const r = SK.mergeReport(targets[fresh.coords], fresh) || targets[fresh.coords];
+  $("attack-to").value = r.coords;
+  SK.RESOURCES.forEach((n, i) => { $("attack-res-" + i).value = r.resources[n] || ""; });
+  const units = { ...r.defense, ...r.fleet };
+  for (const el of document.querySelectorAll("[data-attack-unit]")) el.value = units[el.dataset.attackUnit] || "";
+  const unknown = Object.keys(units).filter(n => !BATTLE.UNITS[n] && !SK.HARMLESS.has(n));
+  attackTechs = Object.keys(r.research || {}).length ? Object.fromEntries(BATTLE.TECHS.map(t => [t, r.research[t] || 0])) : null;
+  renderAttackTechs();
+  $("attack-report").value = "";
+  setStatus("attack-fill-status", r.detailsUnknown ? "Неполный отчёт: флот и оборона цели неизвестны, проверьте поля."
+    : unknown.length ? `Не учитываются: ${unknown.join(", ")}.`
+    : `Заполнено из отчёта ${dateTime(r.time)}${r.time === fresh.time ? "" : " (сохранённого: он новее)"}.`,
+    r.detailsUnknown || unknown.length ? "err" : "ok");
+}
+
+function clearAttack() {
+  for (const el of $("attack").querySelectorAll("input[type=number], #attack-to")) el.value = "";
+  attackTechs = null;
+  renderAttackTechs();
+  setStatus("attack-fill-status", "");
+}
+
+/** Входные данные подбора из полей (attack.js: context); строка — что не так. */
+function attackConfig() {
+  const from = attackOrigin(), to = $("attack-to").value.trim();
+  if (!from) return "Добавьте свою планету в «Моих планетах».";
+  if (!SK.parseCoords(to)) return "Укажите координаты цели, например 8:306:4.";
+  const defense = {};
+  for (const el of document.querySelectorAll("[data-attack-unit]")) {
+    const k = Math.max(0, Math.floor(+el.value || 0));
+    if (k) defense[el.dataset.attackUnit] = k;
+  }
+  return {
+    speed: settings.speed,
+    attacker: { techs: myTechs(), premium: settings.premium },
+    defender: { techs: attackTechs || myTechs() },
+    defense,
+    available: settings.attackDs ? {} : { [BATTLE.DS]: 0 },
+    half: SK.RESOURCES.map((_, i) => Math.floor(Math.max(0, +$("attack-res-" + i).value || 0) * settings.loot / 100)),
+    dists: [SK.distance(SK.parseCoords(from.coords), SK.parseCoords(to))],
+  };
+}
+
+function stopAttack() {
+  attackWorker?.terminate();
+  attackWorker = null;
+  $("attack-run").disabled = false;
+  $("attack-stop").hidden = true;
+}
+
+function runAttack() {
+  const cfg = attackConfig();
+  if (typeof cfg === "string") { setStatus("attack-status", cfg, "err"); return; }
+  if (typeof Worker === "undefined") { setStatus("attack-status", "Браузер не умеет считать в фоне.", "err"); return; }
+  stopAttack();
+  attackTop = null;
+  $("attack-results").innerHTML = "";
+  $("attack-run").disabled = true;
+  $("attack-stop").hidden = false;
+  const started = Date.now(), seconds = () => Math.round((Date.now() - started) / 1000);
+  setStatus("attack-status", "Считаю…");
+  attackWorker = new Worker("attack-worker.js");
+  attackWorker.onmessage = ({ data }) => {
+    if (data.log) { setStatus("attack-status", `Считаю, ${seconds()} с: ${data.log}`); return; }
+    stopAttack();
+    if (data.error) { setStatus("attack-status", "Ошибка расчёта: " + data.error, "err"); return; }
+    attackTop = data.top;
+    setStatus("attack-status", `Готово за ${seconds()} с, дистанция ${fmt(cfg.dists[0])}.`, "ok");
+    renderAttackResults();
+  };
+  attackWorker.onerror = e => { stopAttack(); setStatus("attack-status", "Ошибка расчёта: " + (e.message || e), "err"); };
+  attackWorker.postMessage({ cfg });
+}
+
+/** Сумма в металле со знаком: выгода бывает отрицательной. */
+const money = n => (n < 0 ? "−" : "") + fmtShort(Math.abs(n));
+
+function renderAttackResults() {
+  // Проигрывающие составы не нужны: показываем побеждающие хотя бы в половине боёв.
+  const wins = attackTop.filter(c => c.r.win >= 0.5);
+  const list = obj => Object.entries(obj).map(([n, k]) => `${esc(n)} <span class="num">${k}</span>`).join(", ");
+  const lost = r => Object.fromEntries(Object.entries(r.lost).filter(([, v]) => v >= 0.05)
+    .map(([n, v]) => [n, v.toLocaleString("ru-RU", { maximumFractionDigits: 1 })]));
+  $("attack-results").innerHTML = !wins.length
+    ? `<p class="empty">Ни один состав не побеждает даже флотом в 10 раз дороже обороны цели.</p>`
+    : wins.map((c, i) => `<article class="card">
+        <div class="spread"><span><b>${i + 1}.</b> <span class="profit">${money(c.r.profit)}</span> <span class="muted">выгода</span></span>
+          <span class="pill ${c.r.win >= 0.95 ? "ok" : "warn"}">победа ${Math.round(c.r.win * 100)}%</span></div>
+        <div>${esc(c.share)}</div>
+        <div class="route">${list(Object.fromEntries(Object.entries(c.fleet).map(([n, k]) => [n, fmt(k)])))}</div>
+        <div class="muted" style="font-size:13px">добыча ${fmtShort(c.r.loot)} + обломки ${fmtShort(c.r.debris)}
+          − потери ${fmtShort(c.r.loss)} − топливо ${fmtShort(c.r.fuel)}</div>
+        ${Object.keys(lost(c.r)).length ? `<div class="muted" style="font-size:13px">гибнет в среднем: ${list(lost(c.r))}</div>` : ""}
+      </article>`).join("")
+      + (wins.length < attackTop.length ? `<p class="empty">Остальные составы чаще проигрывают.</p>` : "");
+}
+
 function renderSettings() {
   for (const d of Object.keys(SK.DRIVES)) $("eng-" + d).value = settings.engines[d] ?? 0;
   $("ship").innerHTML = settings.ships.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
@@ -394,6 +534,7 @@ function render() {
   renderPlanets();
   renderMines();
   renderSettings();
+  renderAttack();
 }
 
 // Таймер обновляет только цели: поля ввода ниже не перерисовываются, пока их редактируют.
@@ -502,6 +643,13 @@ $("min-loot").addEventListener("change", e => view({ minLoot: Math.max(0, +e.tar
 $("min-deut").addEventListener("change", e => view({ minDeut: Math.max(0, +e.target.value || 0) }));
 $("page-size").addEventListener("change", e => view({ pageSize: +e.target.value }));
 $("mines-toggle").addEventListener("click", () => { settings.minesOpen = !settings.minesOpen; save({ changed: false }); });
+$("attack-toggle").addEventListener("click", () => { settings.attackOpen = !settings.attackOpen; save({ changed: false }); });
+$("attack-from").addEventListener("change", e => { settings.attackFrom = e.target.value; save({ changed: false }); });
+$("attack-ds").addEventListener("change", e => { settings.attackDs = e.target.checked; save({ changed: false }); });
+$("attack-fill").addEventListener("click", fillAttack);
+$("attack-clear").addEventListener("click", clearAttack);
+$("attack-run").addEventListener("click", runAttack);
+$("attack-stop").addEventListener("click", () => { stopAttack(); setStatus("attack-status", "Остановлено."); });
 
 const goToPage = n => { page = n; tick(); $("h-targets").scrollIntoView({ block: "start" }); };
 $("page").addEventListener("change", e => goToPage(+e.target.value));
@@ -632,6 +780,8 @@ $("speed").innerHTML = Array.from({ length: 10 }, (_, i) => `<option value="${10
 $("filter").innerHTML = Object.entries(FILTERS).map(([k, n]) => `<option value="${k}">${n}</option>`).join("");
 $("sort").innerHTML = Object.entries(SORTS).map(([k, o]) => `<option value="${k}">${o.name}</option>`).join("");
 $("page-size").innerHTML = PAGE_SIZES.map(n => `<option value="${n}">по ${n}</option>`).join("");
+attackUnitFields();
+renderAttackTechs();
 render();
 init()
   .then(render)

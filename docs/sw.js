@@ -1,6 +1,6 @@
 // Офлайн-режим: сначала сеть (чтобы приходили обновления), без сети — последняя сохранённая копия.
 const CACHE = "space-kings-recon";
-const FILES = ["./", "index.html", "core.js", "battle.js", "ds-worker.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const FILES = ["./", "index.html", "core.js", "battle.js", "ds-worker.js", "attack.js", "attack-worker.js", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

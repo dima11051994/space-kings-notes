@@ -89,6 +89,11 @@
   .planet .row input { flex: 1 1 0; }
   .planet .row input.num { flex: 0 1 8em; }
   .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .attack { display: grid; gap: 10px; }
+  .attack h3 { font-size: 14px; margin: 4px 0 0; }
+  .attack .grid3 { align-items: end; }
+  .attack .grid3 label { overflow-wrap: anywhere; }
+  .profit { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -206,9 +211,62 @@
     </div>
     <span class="status" id="data-status" role="status"></span>
   </section>
+
+  <section aria-labelledby="h-attack">
+    <h2 id="h-attack">Подбор атаки</h2>
+    <div class="row">
+      <button id="attack-toggle" aria-expanded="false" aria-controls="attack">Показать</button>
+    </div>
+    <div id="attack" class="attack" hidden>
+      <p class="muted" style="margin:0;font-size:13px">10 самых выгодных составов флота против цели: выгода = добыча + обломки − потери − топливо,
+        всё в металле (1 дейтерий = 2 кристалла = 4 металла). Перебираются ~70 составов, лучших по game-data/attack-study,
+        мега-транспорты добавляются под добычу. Мои технологии и скорость — из настроек выше; добыча — доля «Добыча, %» от ресурсов в отчёте.</p>
+      <textarea id="attack-report" placeholder="Вставьте шпионский отчёт цели — поля ниже заполнятся"></textarea>
+      <div class="row">
+        <button id="attack-fill">Заполнить из отчёта</button>
+        <button id="attack-clear">Очистить</button>
+        <span class="status" id="attack-fill-status" role="status"></span>
+      </div>
+      <div class="grid2">
+        <label>Лететь с планеты <select id="attack-from"></select></label>
+        <label>Цель <input id="attack-to" class="num" placeholder="8:306:4" inputmode="numeric"></label>
+      </div>
+      <div class="grid3">
+        <label>Металл <input type="number" min="0" id="attack-res-0" class="num" inputmode="numeric" placeholder="0"></label>
+        <label>Кристалл <input type="number" min="0" id="attack-res-1" class="num" inputmode="numeric" placeholder="0"></label>
+        <label>Дейтерий <input type="number" min="0" id="attack-res-2" class="num" inputmode="numeric" placeholder="0"></label>
+      </div>
+      <h3>Оборона цели</h3>
+      <div class="grid3" id="attack-defense"></div>
+      <h3>Флот цели</h3>
+      <div class="grid3" id="attack-fleet"></div>
+      <span class="muted" style="font-size:13px" id="attack-techs"></span>
+      <label class="check"><input type="checkbox" id="attack-ds"> Использовать звёзды смерти</label>
+      <div class="row">
+        <button class="primary" id="attack-run">Подобрать</button>
+        <button id="attack-stop" hidden>Стоп</button>
+        <span class="status" id="attack-status" role="status"></span>
+      </div>
+      <div class="list" id="attack-results"></div>
+    </div>
+  </section>
+  <section aria-labelledby="h-defense">
+    <h2 id="h-defense">Памятка: оборона на 100 плазм</h2>
+    <table>
+      <tr><td>Ракетная установка</td><td>35 100</td></tr>
+      <tr><td>Легкий лазер</td><td>4 300</td></tr>
+      <tr><td>Плазменное орудие</td><td>100</td></tr>
+      <tr><td>Пушка Гаусса</td><td>0</td></tr>
+      <tr><td>Малый и большой щитовой купол</td><td>по 1</td></tr>
+    </table>
+    <p class="muted" style="margin:0;font-size:13px">Лучший баланс против обычных флотов и звёзд смерти вместе (game-data/def-balance.js).
+      Гаусс не строить: на те же ресурсы РУ, ЛЛ и плазма держат лучше. Купола — по одному на планету, не умножаются.
+      Пример ×20: 2 000 плазм, 702 000 РУ, 86 000 ЛЛ — снос примерно 1 600 звёзд смерти без их потерь.</p>
+  </section>
 </main>
 <script src="core.js"></script>
 <script src="battle.js"></script>
+<script src="attack.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
