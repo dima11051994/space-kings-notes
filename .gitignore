@@ -1,2 +1,7 @@
 # Шпионские отчёты — не публикуем
 /*.txt
+
+# Сырые результаты game-data/attack-study.js (сотни МБ)
+/game-data/attack-study/*.jsonl
+/game-data/attack-study.log
+!/game-data/attack-study/samples.jsonl
