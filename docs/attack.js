@@ -235,7 +235,7 @@ const ATTACK = (() => {
     return async (fleets, runs) => fleets.map(f => evaluate(ctx, f, runs));
   }
 
-  return { UNITS, DEFENSE, MILITARY, MEGA, SHORT, LEADERS, LOOT, costOf, defenseCost, value, mixKey, parseMix, allMixes, leaders,
+  return { UNITS, DEFENSE, MILITARY, MEGA, SHORT, LEADERS, LOOT, DEBRIS, costOf, debrisOf, defenseCost, value, mixKey, parseMix, allMixes, leaders,
            context, evaluate, fleetFor, share, sweep, best, local };
 })();
 
