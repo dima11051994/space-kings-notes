@@ -5,3 +5,7 @@
 /game-data/attack-study/*.jsonl
 /game-data/attack-study.log
 !/game-data/attack-study/samples.jsonl
+
+# game-data/dominance.js: список оборон (пересоздаётся) и результаты по составам (сотни МБ)
+/game-data/dominance/defenses.json
+/game-data/dominance/fleets/
