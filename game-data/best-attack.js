@@ -5,7 +5,7 @@
 // Перебор — аналитической моделью боя (analytic.js, в матожиданиях), TOP лучших перепроверяются Монте-Карло
 // docs/battle.js (сверен с симулятором игры).
 //
-// node game-data/best-attack.js <input.json | '{...}'>
+// node game-data/best-attack.js <input.json | '{...}'> [--ds — только флот из одних ЗС]
 // {
 //   "from": "8:306:4", "to": "8:297:10", "speed": 100,        // скорость флота, %
 //   "attacker": { "techs": {...}, "premium": true },           // по умолчанию — из settings файла данных
@@ -147,8 +147,8 @@ function targetConfig(input) {
 }
 
 async function main() {
-  const arg = process.argv[2];
-  if (!arg) { console.error("node game-data/best-attack.js <input.json | '{...}'>"); process.exit(2); }
+  const arg = process.argv[2], onlyDS = process.argv.includes("--ds");
+  if (!arg) { console.error("node game-data/best-attack.js <input.json | '{...}'> [--ds]"); process.exit(2); }
   const input = JSON.parse(arg.trim().startsWith("{") ? arg : fs.readFileSync(arg, "utf8"));
   if (!input.from || !input.to) throw new Error("нужны from и to");
   // Добычу не считаем: без ресурсов цели fleetFor не добавляет мега-транспорты.
@@ -157,12 +157,12 @@ async function main() {
   console.error(`дистанция ${cfg.dists[0]}, оборона+флот цели ${Math.round(defenseCost(cfg.defense) / 1e6)} млн`);
   // ЗС слишком медленные, чтобы идти в общем флоте: составы с ними не перебираем, только ЗС — отдельно.
   const types = MILITARY.filter(n => n !== B.DS && cfg.available[n] !== 0);
-  const top = await search(cfg, workers, grid(types, COARSE), TOP, { types });
+  const top = onlyDS ? [] : await search(cfg, workers, grid(types, COARSE), TOP, { types });
   // Для нескольких ЗС модель завышает шанс победы — проверяем Монте-Карло все размеры, что побеждают по модели.
   const ds = cfg.available[B.DS] === 0 ? [] : await search(cfg, workers, [{ [B.DS]: 1 }], 1, { verifySizes: Infinity });
   workers.close();
 
-  if (!top.length) console.log(`без ЗС ни один флот не побеждает хотя бы в ${MIN_WIN * 100}% боёв`);
+  if (!top.length && !onlyDS) console.log(`без ЗС ни один флот не побеждает хотя бы в ${MIN_WIN * 100}% боёв`);
   top.forEach((c, i) => print(`${i + 1}.`, c));
   if (ds.length) print("\nОтдельно, только ЗС:", ds[0]);
   else if (cfg.available[B.DS] !== 0) console.log(`\nОтдельно, только ЗС: не побеждают хотя бы в ${MIN_WIN * 100}% боёв`);
@@ -193,15 +193,18 @@ function neighbors(mix, types) {
 }
 
 /**
- * Подбор размера флота — шаг за шагом: sizeState(mix, budget, limit) — начало, sizeStep(s, f, e) — учесть флот f
+ * Подбор размера флота — шаг за шагом: sizeState(mix, budget, limit, near) — начало, sizeStep(s, f, e) — учесть флот f
  * на бюджет s.cur (null — столько кораблей нет, {} — бюджета не хватает ни на один корабль) и его оценку
  * e = { r: { win, net } } (null для null / {}), после чего s.cur — следующий бюджет, пока s.phase !== "done".
  * Сначала порог победы: бюджет ×2 или /2, пока победа (MIN_WIN) не окажется между проигрышем и победой, затем
- * делением пополам до точности PRECISION. От лучшего найденного бюджет растёт ×CLIMB, пока чистые потери падают —
- * до двух шагов без улучшения (больше флот — меньше гибнет, но больше топлива); затем доводка ÷/× POLISH
+ * делением пополам до точности PRECISION. Если порог известен примерно (near — бюджет, с которого побеждал
+ * тот же состав против похожей обороны), поиск начинается с него, а шаг растёт от ×PRECISION до ×2 (квадратом),
+ * если угадали плохо. После поиска s.hi — найденный порог (Infinity — не побеждает). От лучшего найденного
+ * бюджет растёт ×CLIMB, пока чистые потери падают — до двух шагов без улучшения (больше флот — меньше гибнет, но больше топлива); затем доводка ÷/× POLISH
  * вокруг лучшего. s.best — лучшая побеждающая оценка, s.bestBudget — её бюджет.
  */
-const sizeState = (mix, budget, limit) => ({ mix, cur: budget, limit, lo: 0, hi: Infinity, phase: "find", best: null });
+const sizeState = (mix, budget, limit, near) =>
+  ({ mix, cur: near || budget, grow: near ? PRECISION : 2, limit, lo: 0, hi: Infinity, phase: "find", best: null });
 
 function sizeStep(s, f, e) {
   const win = !!e && e.r.win >= MIN_WIN, better = win && (!s.best || e.r.net < s.best.r.net);
@@ -225,10 +228,12 @@ function sizeStep(s, f, e) {
   }
   if (win) s.hi = s.cur; else s.lo = s.cur;
   if (!f && !win) s.cap = true;  // больше кораблей нет — выше не подняться
+  const grow = s.grow;
+  s.grow = Math.min(2, grow * grow);
   if (s.hi === Infinity) {
-    if (s.cap || s.cur * 2 > s.limit) s.phase = "done"; else s.cur *= 2;
-  } else if (s.lo === 0) s.cur /= 2;
-  else if (s.hi / s.lo > PRECISION) s.cur = Math.sqrt(s.lo * s.hi);
+    if (s.cap || s.cur * grow > s.limit) s.phase = "done"; else s.cur *= grow;
+  } else if (s.lo === 0) s.cur /= grow;
+  else if (s.hi / s.lo > PRECISION * (1 + 1e-9)) s.cur = Math.sqrt(s.lo * s.hi);
   // Лучший по потерям побеждающий флот мог встретиться и выше порога (при удвоении) — растём от него.
   else { s.phase = "climb"; s.worse = 0; s.cur = s.bestBudget * CLIMB; }
 }

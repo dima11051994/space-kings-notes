@@ -31,7 +31,7 @@ const FLEET_TYPES = A.MILITARY.filter(n => n !== B.DS);
 // На каждой дистанции (в металле): бой — потери − собранные обломки, полёт — топливо флота и переработчиков
 // (чистые потери = бой + полёт), бюджет флота.
 const COLUMNS = DIST_SYSTEMS.flatMap(n => [`battle${n}`, `flight${n}`, `budget${n}`]);
-const CHUNK = 20;  // оборон в одном задании потоку
+const CHUNK = 100;  // оборон в одном задании потоку (подряд — для тёплого старта pair)
 
 /** Технологии и дистанции: обе стороны — наши технологии, у цели без премиума. */
 function settings() {
@@ -60,9 +60,10 @@ function defenses() {
 /**
  * Состав `mix` против обороны: подбор размера (BA.sizeStep) по чистым потерям на первой дистанции контекста
  * (самой короткой), для остальных — лучший размер среди оценённых. Возвращает строку COLUMNS.
+ * warm — общий объект для подряд идущих (похожих) оборон: порог победы прошлой — начало поиска порога этой.
  */
-function pair(ctx, mix) {
-  const s = BA.sizeState(mix, BUDGET, BUDGET * 100), seen = new Map();
+function pair(ctx, mix, warm = {}) {
+  const s = BA.sizeState(mix, BUDGET, BUDGET * 100, warm.near), seen = new Map();
   while (s.phase !== "done") {
     const f = A.fleetFor(ctx, s.cur, mix), k = f && JSON.stringify(f);
     let e = null;
@@ -72,6 +73,7 @@ function pair(ctx, mix) {
     }
     BA.sizeStep(s, f, e);
   }
+  warm.near = s.hi < Infinity ? s.hi : undefined;
   const row = new Array(COLUMNS.length).fill(NaN);
   if (!s.best) return row;
   DIST_SYSTEMS.forEach((_, d) => {
@@ -88,7 +90,8 @@ if (!isMainThread) {
   const ctx = A.context({ ...cfg, defense: {} });
   parentPort.on("message", ({ mix, from, to }) => {
     const rows = [];
-    for (let i = from; i < to; i++) { ctx.defense = defs[i]; rows.push(pair(ctx, mix)); }
+    const warm = {};  // соседние обороны в списке похожи (defenses: меняется доля одного-двух типов)
+    for (let i = from; i < to; i++) { ctx.defense = defs[i]; rows.push(pair(ctx, mix, warm)); }
     parentPort.postMessage({ from, rows });
   });
 }
