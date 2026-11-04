@@ -2,7 +2,7 @@
 // каждый бой считается один раз, добыча / топливо / выгода — для дистанций в 10, 30, 50, 100 и 200 систем.
 // node game-data/attack-study.js — пишет game-data/attack-study/<цель>.jsonl, по строке на оценённый флот;
 // уже посчитанные цели пропускает (удалите файл, чтобы пересчитать).
-// node game-data/attack-study.js --excluded — досчитать к уже посчитанным целям составы из excluded-mixes.json,
+// node game-data/attack-study.js --excluded — досчитать к уже посчитанным целям составы из docs/excluded-mixes.json,
 // которых в их файлах нет (дописывает в конец файла).
 const fs = require("fs");
 const path = require("path");

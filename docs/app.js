@@ -1,5 +1,6 @@
 // Интерфейс. Данные — в IndexedDB этого браузера: каждый отчёт отдельной записью, настройки — одной.
-// Расчёты — core.js, бой и звёзды смерти — battle.js (в фоне, ds-worker.js), подбор атаки — attack.js (в фоне, attack-worker.js).
+// Расчёты — core.js, бой и звёзды смерти — battle.js (в фоне, ds-worker.js), подбор атаки — attack.js (в фоне, attack-worker.js),
+// самый дешёвый флот — cheapest.js (оценки флотов — в потоках cheapest-worker.js).
 const DB_NAME = "space-kings-recon";
 const LEGACY_KEY = "space-kings-recon-v1";  // localStorage старых версий, переносится при первом запуске
 const MEGA = { id: "mega", name: "Мега транспорт", drive: "impulse", base: 7000, capacity: 350000, consumption: 100 };
@@ -26,6 +27,7 @@ const DEFAULT_SETTINGS = {
   attackOpen: false, // показан подбор атаки
   attackFrom: "",    // своя планета, с которой лететь в подборе атаки
   attackDs: true,    // подбирать составы со звёздами смерти
+  cheapFrom: "",     // своя планета, с которой лететь в подборе самого дешёвого флота
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
 const PAGE_SIZES = [10, 20, 50];
@@ -249,7 +251,8 @@ function card(v, now) {
   return `<article class="card">
     <div class="spread">
       <span><span class="coords">${esc(r.coords)}</span> <span class="muted">${esc(r.planet)}</span></span>
-      <button class="small danger" data-delete-target="${esc(r.coords)}">Удалить</button>
+      <span class="row">${task ? `<button class="small" data-cheapest="${esc(r.coords)}">Дешёвый флот</button>` : ""}
+        <button class="small danger" data-delete-target="${esc(r.coords)}">Удалить</button></span>
     </div>
     <div class="muted" style="font-size:13px">отчёт ${dateTime(r.time)}, ${age(now - r.time)} назад</div>
     <div class="spread"><span><span class="loot">${fmtShort(v.total)}</span> <span class="muted num">≈ ${fmtShort(v.deut)} дейт.</span></span><span>${pills}</span></div>
@@ -483,6 +486,177 @@ function renderAttackResults() {
       + (wins.length < attackTop.length ? `<p class="empty">Остальные составы чаще проигрывают.</p>` : "");
 }
 
+// ---- Самый дешёвый флот (cheapest.js) ----
+
+const CHEAP_SHOWN = 5;  // столько лучших составов показываем
+let cheapData = null;   // Promise { excluded, table } — справочник и исключённые составы, грузятся один раз
+let cheapPool = null;   // идёт подбор: потоки cheapest-worker.js
+
+/** Своя планета, с которой лететь: выбранная или первая. */
+const cheapOrigin = () => settings.planets.find(p => p.coords === settings.cheapFrom) || settings.planets[0];
+
+function renderCheap() {
+  $("cheap-from").innerHTML = settings.planets.length
+    ? settings.planets.map(p => `<option value="${esc(p.coords)}">${esc(p.coords)}${p.name ? " " + esc(p.name) : ""}</option>`).join("")
+    : `<option value="">Добавьте свои планеты</option>`;
+  $("cheap-from").value = cheapOrigin()?.coords ?? "";
+}
+
+/** Распаковать gzip (сервер мог уже распаковать сам — тогда байты как есть); null — браузер не умеет. */
+async function gunzip(buf) {
+  const bytes = new Uint8Array(buf);
+  if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+  if (typeof DecompressionStream === "undefined") return null;
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+}
+
+/** Справочник симуляций и исключённые составы; без справочника подбор стартует со всей сетки (дольше). */
+function loadCheapData() {
+  const get = (url, how) => fetch(url).then(r => { if (!r.ok) throw new Error(`${url}: ${r.status}`); return r[how](); });
+  cheapData ||= Promise.all([get("excluded-mixes.json", "json"), get("dominance-top.bin.gz", "arrayBuffer").then(gunzip)])
+    .then(([ex, bytes]) => ({ excluded: new Set(ex.mixes), table: bytes && CHEAPEST.table(bytes) }))
+    .catch(e => { cheapData = null; throw e; });
+  return cheapData;
+}
+
+/**
+ * Потоки для оценки флотов цели cfg: { run(флоты, боёв) → Promise оценок, size, close() }. Флоты раздаются
+ * из общей очереди свободным потокам; после close() ждущие оценки отклоняются.
+ */
+function cheapWorkers(cfg) {
+  const size = Math.min(8, navigator.hardwareConcurrency || 4), queue = [], idle = [], busy = new Map();
+  let closed = false, nextId = 0;
+  const give = w => {
+    const task = queue.shift();
+    if (!task) { idle.push(w); return; }
+    busy.set(w, task);
+    w.postMessage({ id: nextId++, fleet: task.fleet, runs: task.runs });
+  };
+  const workers = Array.from({ length: size }, () => {
+    const w = new Worker("cheapest-worker.js");
+    w.postMessage({ cfg });
+    w.onmessage = ({ data }) => {
+      const task = busy.get(w);
+      busy.delete(w);
+      if (data.error) task.reject(new Error(data.error)); else task.resolve(data.r);
+      give(w);
+    };
+    w.onerror = e => { e.preventDefault(); busy.get(w)?.reject(new Error(e.message || "ошибка потока")); busy.delete(w); give(w); };
+    idle.push(w);
+    return w;
+  });
+  const run = (fleets, runs) => Promise.all(fleets.map(fleet => new Promise((resolve, reject) => {
+    if (closed) { reject(new Error("остановлено")); return; }
+    queue.push({ fleet, runs, resolve, reject });
+    if (idle.length) give(idle.pop());
+  })));
+  const close = () => {
+    closed = true;
+    workers.forEach(w => w.terminate());
+    for (const t of [...queue, ...busy.values()]) t.reject(new Error("остановлено"));
+    queue.length = 0;
+    busy.clear();
+  };
+  return { run, size, close };
+}
+
+/** Входные данные подбора по отчёту (cheapest.js: best); строка — что не так. */
+function cheapConfig(r) {
+  const from = cheapOrigin();
+  if (!from) return "Добавьте свою планету в «Моих планетах».";
+  if (r.detailsUnknown) return "Неполный отчёт: оборона и флот цели неизвестны.";
+  const defense = {};
+  for (const sec of [r.defense, r.fleet])
+    for (const [n, k] of Object.entries(sec || {})) if (k > 0 && BATTLE.UNITS[n] && !SK.HARMLESS.has(n)) defense[n] = k;
+  if (!Object.keys(defense).length) return "У цели нет ни обороны, ни флота — нападать можно любым флотом.";
+  const own = !Object.keys(r.research || {}).length;
+  return {
+    to: r.coords, speed: settings.speed, own,
+    attacker: { techs: myTechs(), premium: settings.premium },
+    // Премиума у цели не бывает.
+    defender: { techs: own ? myTechs() : Object.fromEntries(BATTLE.TECHS.map(t => [t, r.research[t] || 0])) },
+    defense, available: {}, half: [0, 0, 0],
+    dists: [SK.distance(SK.parseCoords(from.coords), SK.parseCoords(r.coords))],
+  };
+}
+
+function stopCheap() {
+  cheapPool?.close();
+  cheapPool = null;
+  $("cheap-run").disabled = false;
+  $("cheap-stop").hidden = true;
+}
+
+/** Подбор по отчёту r (вставленному или сохранённому). */
+async function runCheap(r) {
+  const cfg = cheapConfig(r);
+  $("cheap-results").innerHTML = "";
+  $("cheap-target").textContent = "";
+  if (typeof cfg === "string") { setStatus("cheap-status", cfg, "err"); return; }
+  if (typeof Worker === "undefined") { setStatus("cheap-status", "Браузер не умеет считать в фоне.", "err"); return; }
+  stopCheap();
+  const t = cfg.defender.techs;
+  $("cheap-target").textContent = `Цель ${r.coords}, отчёт ${dateTime(r.time)}: оборона и флот ${fmtShort(ATTACK.defenseCost(cfg.defense))}, `
+    + `дистанция ${fmt(cfg.dists[0])}; технологии цели ${cfg.own ? "— мои (в отчёте их нет)" : `оружие ${t["Оружейная технология"]}, щиты ${t["Щитовая технология"]}, броня ${t["Броня космических кораблей"]}`}.`;
+  $("cheap-run").disabled = true;
+  $("cheap-stop").hidden = false;
+  const started = Date.now(), seconds = () => Math.round((Date.now() - started) / 1000);
+  setStatus("cheap-status", "Загружаю справочник…");
+  const pool = cheapPool = cheapWorkers(cfg);
+  try {
+    const data = await loadCheapData();
+    if (pool !== cheapPool) return;
+    const env = { ...pool, ...data, log: text => { if (pool === cheapPool) setStatus("cheap-status", `Считаю, ${seconds()} с: ${text.split("\n")[0]}`); } };
+    const res = await CHEAPEST.best(cfg, env);
+    if (pool !== cheapPool) return;
+    stopCheap();
+    setStatus("cheap-status", `Готово за ${seconds()} с${data.table ? "" : " (без справочника: браузер не распаковал его, перебрана вся сетка)"}.`, "ok");
+    renderCheapResults(res);
+  } catch (e) {
+    if (pool !== cheapPool) return;  // остановлено или начат новый подбор
+    stopCheap();
+    setStatus("cheap-status", "Ошибка расчёта: " + (e?.message || e), "err");
+  }
+}
+
+function cheapCard(title, c) {
+  const r = c.r, a = r.at[0];
+  const list = obj => Object.entries(obj).map(([n, k]) => `${esc(n)} <span class="num">${k}</span>`).join(", ");
+  const lost = Object.fromEntries(Object.entries(r.lost).filter(([, v]) => v >= 0.05)
+    .map(([n, v]) => [n, v.toLocaleString("ru-RU", { maximumFractionDigits: 1 })]));
+  return `<article class="card">
+    <div class="spread"><span><b>${title}</b> <span class="profit">${money(r.net)}</span> <span class="muted">чистые потери</span></span>
+      <span class="pill ${r.win >= 0.95 ? "ok" : "warn"}">победа ${Math.round(r.win * 100)}%</span></div>
+    <div>${esc(c.share)}</div>
+    <div class="route">${list(Object.fromEntries(Object.entries(c.fleet).map(([n, k]) => [n, fmt(k)])))}</div>
+    <div class="muted" style="font-size:13px">потери флота ${money(r.loss)} + топливо ${money(a.fuel)} − обломки ${money(r.debris)}
+      + топливо переработчиков ${money(a.recFuel)}${a.recyclers ? ` (переработчиков ${fmt(Math.ceil(a.recyclers))})` : ""}</div>
+    ${Object.keys(lost).length ? `<div class="muted" style="font-size:13px">гибнет в среднем: ${list(lost)}</div>` : ""}
+    <div class="muted" style="font-size:13px">${c.verified ? `проверено 100 боями: ±${money(r.sd)}, модель ${money(c.model.net)}` : "по модели боя, без проверки боями"}</div>
+  </article>`;
+}
+
+function renderCheapResults({ top, ds, start, refs }) {
+  const shown = top.slice(0, CHEAP_SHOWN);
+  $("cheap-results").innerHTML = (shown.length
+    ? shown.map((c, i) => cheapCard(`${i + 1}.`, c)).join("")
+    : `<p class="empty">Без звёзд смерти ни один флот не побеждает в 90% боёв даже за 100× стоимости обороны.</p>`)
+    + (ds ? cheapCard("Только звёзды смерти:", ds) : `<p class="empty">Одни звёзды смерти не побеждают в 90% боёв.</p>`)
+    + (start ? `<details><summary>Справочник: похожие обороны и стартовые составы</summary><table>
+        <tr><td colspan="2"><b>Ближайшие обороны сетки (дистанция ${refs.distSystems} систем)</b></td></tr>
+        ${refs.near.map(x => `<tr><td>${esc(x.key)}</td><td>L1 ${x.l1.toFixed(2)}</td></tr>`).join("")}
+        <tr><td colspan="2"><b>Стартовые составы</b></td></tr>
+        ${start.map(x => `<tr><td>${esc(x.key)}</td><td>отставание ~${(x.gap * 100).toFixed(1)}%</td></tr>`).join("")}
+      </table></details>` : "");
+}
+
+/** Подбор по вставленному отчёту; флот и оборону неполного отчёта берём из сохранённого по этой цели. */
+function runCheapFromText() {
+  const [fresh] = SK.parseReports($("cheap-report").value);
+  if (!fresh) { setStatus("cheap-status", "Не нашёл отчёт: нужен текст «Шпионский доклад с … [г:с:п] от …».", "err"); return; }
+  runCheap(SK.mergeReport(targets[fresh.coords], fresh) || targets[fresh.coords]);
+}
+
 function renderSettings() {
   for (const d of Object.keys(SK.DRIVES)) $("eng-" + d).value = settings.engines[d] ?? 0;
   $("ship").innerHTML = settings.ships.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
@@ -535,6 +709,7 @@ function render() {
   renderMines();
   renderSettings();
   renderAttack();
+  renderCheap();
 }
 
 // Таймер обновляет только цели: поля ввода ниже не перерисовываются, пока их редактируют.
@@ -650,6 +825,9 @@ $("attack-fill").addEventListener("click", fillAttack);
 $("attack-clear").addEventListener("click", clearAttack);
 $("attack-run").addEventListener("click", runAttack);
 $("attack-stop").addEventListener("click", () => { stopAttack(); setStatus("attack-status", "Остановлено."); });
+$("cheap-from").addEventListener("change", e => { settings.cheapFrom = e.target.value; save({ changed: false }); });
+$("cheap-run").addEventListener("click", runCheapFromText);
+$("cheap-stop").addEventListener("click", () => { stopCheap(); setStatus("cheap-status", "Остановлено."); });
 
 const goToPage = n => { page = n; tick(); $("h-targets").scrollIntoView({ block: "start" }); };
 $("page").addEventListener("change", e => goToPage(+e.target.value));
@@ -674,6 +852,10 @@ document.addEventListener("click", e => {
   if (t.dataset.deleteTarget && confirmDelete()) {
     delete targets[t.dataset.deleteTarget];
     save({ remove: [t.dataset.deleteTarget] });
+  }
+  if (t.dataset.cheapest && targets[t.dataset.cheapest]) {
+    runCheap(targets[t.dataset.cheapest]);
+    $("h-cheapest").scrollIntoView({ block: "start" });
   }
   if (t.dataset.deletePlanet && confirmDelete()) { settings.planets.splice(+t.dataset.deletePlanet, 1); save(); }
   if (t.dataset.deleteShip && confirmDelete()) {

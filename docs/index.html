@@ -263,10 +263,29 @@
       Гаусс не строить: на те же ресурсы РУ, ЛЛ и плазма держат лучше. Купола — по одному на планету, не умножаются.
       Пример ×20: 2 000 плазм, 702 000 РУ, 86 000 ЛЛ — снос примерно 1 600 звёзд смерти без их потерь.</p>
   </section>
+
+  <section aria-labelledby="h-cheapest">
+    <h2 id="h-cheapest">Самый дешёвый флот</h2>
+    <p class="muted" style="margin:0;font-size:13px">Флот, который побеждает оборону и флот цели (в 90% боёв) с наименьшими чистыми потерями:
+      погибшие корабли + топливо − обломки, собранные переработчиками. Добыча не учитывается. Старт — 5 лучших составов по справочнику
+      симуляций для похожих оборон, затем соседние доли шагом 10%, размер — под технологии цели; лучший флот проверяется 100 боями.
+      Звёзды смерти — отдельно. Мои технологии и скорость — из настроек выше. Посчитать для сохранённой цели — кнопка «Дешёвый флот» на её карточке.</p>
+    <label>Лететь с планеты <select id="cheap-from"></select></label>
+    <textarea id="cheap-report" placeholder="Вставьте шпионский отчёт цели"></textarea>
+    <div class="row">
+      <button class="primary" id="cheap-run">Подобрать</button>
+      <button id="cheap-stop" hidden>Стоп</button>
+      <span class="status" id="cheap-status" role="status"></span>
+    </div>
+    <div class="muted" style="font-size:13px" id="cheap-target"></div>
+    <div class="list" id="cheap-results"></div>
+  </section>
 </main>
 <script src="core.js"></script>
 <script src="battle.js"></script>
 <script src="attack.js"></script>
+<script src="analytic.js"></script>
+<script src="cheapest.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
