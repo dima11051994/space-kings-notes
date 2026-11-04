@@ -50,10 +50,15 @@ function beats(a, b, ds) {
 function main() {
   const fleets = load();
   if (fleets.length < 2) { console.log(`посчитано составов: ${fleets.length} — сравнивать не с чем`); return; }
-  // Средние потери по оборонам, которые побеждают все посчитанные составы (иначе среднее бесконечно).
+  // Средние потери по оборонам, которые побеждают все посчитанные составы (иначе среднее бесконечно). Составы,
+  // не побеждающие ни одной обороны (ЛИ 100 не пробивает большой купол, а он есть в каждой), в этот отбор
+  // не входят — иначе общих оборон нет совсем; их среднее бесконечно.
+  const winsAny = f => f.net[0].some(v => v !== Infinity);
+  const useless = fleets.filter(f => !winsAny(f));
   const common = [];
-  for (let j = 0; j < D; j++) if (fleets.every(f => f.net.every(a => a[j] !== Infinity))) common.push(j);
-  for (const f of fleets) f.mean = f.net.map(a => common.reduce((s, j) => s + a[j], 0) / (common.length || 1));
+  for (let j = 0; j < D; j++) if (fleets.every(f => !winsAny(f) || f.net.every(a => a[j] !== Infinity))) common.push(j);
+  for (const f of fleets)
+    f.mean = winsAny(f) ? f.net.map(a => common.reduce((s, j) => s + a[j], 0) / (common.length || 1)) : f.net.map(() => Infinity);
   const meanAll = f => f.mean.reduce((a, b) => a + b, 0) / f.mean.length;
 
   // Наборы дистанций: каждая отдельно и все сразу.
@@ -88,9 +93,10 @@ function main() {
   }
   fs.writeFileSync(path.join(DIR, "analysis.json"), JSON.stringify(result, null, 1));
 
-  const m = v => (v / 1e6).toFixed(1);
+  const m = v => Number.isFinite(v) ? (v / 1e6).toFixed(1) : "—";
   console.log(`посчитано составов ${fleets.length} из ${meta.mixes.length}, допуск ${m(TOL)} млн, ` +
-              `оборон, которые побеждают все: ${common.length} из ${D}`);
+              `оборон, которые побеждают все: ${common.length} из ${D}` +
+              (useless.length ? ` (кроме не побеждающих ни одной: ${useless.map(f => f.key).join(", ")})` : ""));
   for (const s of result.sets)
     console.log(`  ${s.name.padEnd(14)} бьют другие: ${String(s.dominated.length).padStart(3)} | ни разу не лучший: ${String(s.never.length).padStart(3)}`);
   const all = result.sets.at(-1);

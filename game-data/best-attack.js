@@ -2,10 +2,13 @@
 // и его размера. Добыча не учитывается.
 // Чистые потери = погибшие корабли + топливо флота − (обломки − топливо переработчиков, чтобы их собрать);
 // обломки — 30% металла и кристалла погибших кораблей обеих сторон; всё в металле по курсу 1 : 2 : 4.
-// Перебор — аналитической моделью боя (analytic.js, в матожиданиях), TOP лучших перепроверяются Монте-Карло
-// docs/battle.js (сверен с симулятором игры).
+// Стартовые составы — REF_MIXES лучших по итогам перебора dominance.js для ближайших оборон сетки
+// (dominance-top.js, файл dominance-top.bin.gz; там — 500 млн и наши технологии у обеих сторон), дальше — соседи
+// шагом 10%. Размер флота и соседей подбирает аналитическая модель боя (analytic.js, в матожиданиях) с технологиями
+// этой цели; VERIFY_MIXES лучших составов перепроверяются Монте-Карло docs/battle.js (сверен с симулятором игры).
 //
 // node game-data/best-attack.js <input.json | '{...}'> [--ds — только флот из одних ЗС]
+//                                                      [--full — стартовать со всей сетки 20%, без итогов dominance]
 // {
 //   "from": "8:306:4", "to": "8:297:10", "speed": 100,        // скорость флота, %
 //   "attacker": { "techs": {...}, "premium": true },           // по умолчанию — из settings файла данных
@@ -13,7 +16,7 @@
 //   "defense": { "Ракетная установка": 100, "Линкор": 5 },     // оборона и флот цели; по умолчанию — из отчёта
 //   "available": { "Звезда смерти": 3 }                        // сколько кораблей есть; не указанные — без ограничения
 // }
-// Вывод: 10 лучших составов без звёзд смерти (у каждого — лучший размер): сначала побеждающие в MIN_WIN боёв,
+// Вывод: до VERIFY_MIXES лучших составов без звёзд смерти (у каждого — лучший размер): сначала побеждающие в MIN_WIN боёв,
 // затем по чистым потерям; отдельно — лучший флот из одних ЗС (в общем флоте они тормозят его скорость).
 //
 // Модулем (game-data/attack-study.js): sweep() / pool() — прежний перебор по выгоде с добычей (Монте-Карло),
@@ -26,19 +29,23 @@ const B = require("../docs/battle.js");
 const SK = require("../docs/core.js");
 const A = require("../docs/attack.js");
 const { analyze } = require("./analytic.js");
+const DT = require("./dominance-top.js");
 
 const { MILITARY, MEGA, SHORT, mixKey, share, allMixes, defenseCost, value } = A;
 // Заведомо невыгодные составы — по итогам game-data/attack-study (см. excluded-mixes.json).
 const EXCLUDED = new Set(require("./excluded-mixes.json").mixes);
 const TOP = 10;
 const MIN_WIN = 0.9;      // годится флот, побеждающий хотя бы в 90% боёв
-const VERIFY_MIXES = 25;  // столько лучших составов (у каждого — VERIFY_SIZES лучших размеров) перепроверяем Монте-Карло
+const VERIFY_MIXES = 5;   // столько лучших составов (у каждого — VERIFY_SIZES лучших размеров) перепроверяем Монте-Карло
 const VERIFY_SIZES = 2;
 const VERIFY_RUNS = 100;
-// Поиск: сетка составов с шагом COARSE десятых, затем REFINE_ROUNDS раз соседи (шаг 10%) REFINE_TOP лучших.
+// Поиск: стартовые составы, затем соседи (шаг 10%) REFINE_TOP лучших — не меньше REFINE_MIN_ROUNDS раз и дальше, пока
+// улучшается лучший, но не больше REFINE_ROUNDS раз.
 const COARSE = 2;
+const REF_MIXES = 5;    // столько стартовых составов из итогов dominance (вместо всей сетки COARSE)
 const REFINE_TOP = 20;
-const REFINE_ROUNDS = 3;
+const REFINE_MIN_ROUNDS = 3;
+const REFINE_ROUNDS = 10;
 // Размер флота: порог победы — с точностью PRECISION по бюджету, дальше рост ×CLIMB, пока чистые потери падают.
 const PRECISION = 1.1;
 const CLIMB = 1.25;
@@ -157,7 +164,7 @@ async function main() {
   console.error(`дистанция ${cfg.dists[0]}, оборона+флот цели ${Math.round(defenseCost(cfg.defense) / 1e6)} млн`);
   // ЗС слишком медленные, чтобы идти в общем флоте: составы с ними не перебираем, только ЗС — отдельно.
   const types = MILITARY.filter(n => n !== B.DS && cfg.available[n] !== 0);
-  const top = onlyDS ? [] : await search(cfg, workers, grid(types, COARSE), TOP, { types });
+  const top = onlyDS ? [] : await search(cfg, workers, starts(cfg, types, process.argv.includes("--full")), TOP, { types });
   // Для нескольких ЗС модель завышает шанс победы — проверяем Монте-Карло все размеры, что побеждают по модели.
   const ds = cfg.available[B.DS] === 0 ? [] : await search(cfg, workers, [{ [B.DS]: 1 }], 1, { verifySizes: Infinity });
   workers.close();
@@ -166,6 +173,23 @@ async function main() {
   top.forEach((c, i) => print(`${i + 1}.`, c));
   if (ds.length) print("\nОтдельно, только ЗС:", ds[0]);
   else if (cfg.available[B.DS] !== 0) console.log(`\nОтдельно, только ЗС: не побеждают хотя бы в ${MIN_WIN * 100}% боёв`);
+}
+
+/**
+ * Стартовые составы поиска: REF_MIXES лучших по итогам dominance (dominance-top.js) для ближайших к обороне
+ * оборон сетки, только из типов `types`; без файла итогов или с full — вся сетка шагом COARSE.
+ */
+function starts(cfg, types, full) {
+  const allowed = new Set(types);
+  const c = !full && DT.candidates(cfg.defense, cfg.dists[0], REF_MIXES, mix => Object.keys(mix).every(n => allowed.has(n)));
+  if (!c || !c.list.length) {
+    if (!full) console.error(`нет итогов dominance (${path.basename(DT.FILE)}) — перебираю всю сетку`);
+    return grid(types, COARSE);
+  }
+  console.error(`ближайшие обороны сетки (дистанция ${c.refs.distSystems} систем):\n` +
+                c.refs.near.map(x => `  ${x.key} (L1 ${x.l1.toFixed(2)})`).join("\n"));
+  console.error(`стартовые составы:\n` + c.list.map(x => `  ${x.key} (отставание ~${(x.gap * 100).toFixed(1)}%)`).join("\n"));
+  return c.list.map(x => x.mix);
 }
 
 /** Составы из типов `types` с долями, кратными step десятым (в сумме 100%), кроме EXCLUDED. */
@@ -264,7 +288,7 @@ async function sizes(ctx, workers, starts, seen, limit) {
 
 /**
  * Лучшие `top` составов (у каждого — лучший размер). Аналитикой: составы `mixList`, затем, если даны `types`,
- * до REFINE_ROUNDS раз соседи (шаг 10%) REFINE_TOP лучших — размер соседа ищется от бюджета родителя.
+ * соседи (шаг 10%) REFINE_TOP лучших, пока лучший улучшается (REFINE_MIN_ROUNDS…REFINE_ROUNDS раз) — размер соседа ищется от бюджета родителя.
  * У VERIFY_MIXES лучших побеждающих составов verifySizes размеров перепроверяются Монте-Карло; после проверки —
  * сначала побеждающие в MIN_WIN боёв, затем по чистым потерям. c.r — итог Монте-Карло, c.model — аналитики.
  */
@@ -272,15 +296,17 @@ async function search(cfg, workers, mixList, top, { types, verifySizes = VERIFY_
   const t0 = Date.now(), ctx = A.context(cfg), seen = new Map();
   const defCost = defenseCost(cfg.defense), limit = Math.max(1e9, defCost * 100);
   const best = await sizes(ctx, workers, mixList.map(mix => ({ mix, budget: Math.max(1e5, defCost) })), seen, limit);
-  console.error(`сетка ${COARSE * 10}%: составов ${mixList.length}, флотов ${seen.size}`);
+  console.error(`стартовых составов ${mixList.length}, флотов ${seen.size}`);
   const tried = new Set(mixList.map(mixKey));
+  const bestNet = () => Math.min(...[...best.values()].map(e => e.r.net));
   for (let round = 0; types && round < REFINE_ROUNDS; round++) {
-    const starts = [];
+    const before = bestNet(), starts = [];
     for (const e of [...best.values()].sort((a, b) => a.r.net - b.r.net).slice(0, REFINE_TOP))
       for (const mix of neighbors(e.mix, types)) if (!tried.has(mixKey(mix))) { tried.add(mixKey(mix)); starts.push({ mix, budget: e.budget }); }
     if (!starts.length) break;
     for (const [k, e] of await sizes(ctx, workers, starts, seen, limit)) best.set(k, e);
     console.error(`уточнение ${round + 1}: соседей ${starts.length}, флотов всего ${seen.size}`);
+    if (round + 1 >= REFINE_MIN_ROUNDS && !(bestNet() < before)) break;  // лучший перестал улучшаться
   }
   const all = [...seen.values()];
   const byMix = new Map();
