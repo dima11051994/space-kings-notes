@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = {
   shipId: "mega",
   speed: 100,
   loot: 50,
-  filter: "all", // all | open | guarded
+  filter: "all", // all | open | guarded | planet (подходящие для планеты distFrom)
   onlyFull: false,        // только с полным складом
   onlyIncomplete: false,  // только с неизвестной защитой и постройками
   minLoot: 0,             // добыча от, тыс.; 0 — без ограничения
@@ -33,7 +33,9 @@ const DEFAULT_SETTINGS = {
 const PAGE_SIZES = [10, 20, 50];
 const BACKUP_EVERY = 3 * 24 * 3.6e6;  // напоминать, если копии нет дольше 3 дней
 const SNOOZE = 24 * 3.6e6;
-const FILTERS = { all: "Все цели", open: "Без защиты", guarded: "С защитой" };
+const FILTERS = { all: "Все цели", open: "Без защиты", guarded: "С защитой", planet: "Подходящие для планеты" };
+// Фильтр planet: цели без защиты в галактике планеты; чем дальше (в системах), тем больше нужна добыча в дейтерии.
+const PLANET_MIN_DEUT = [[10, 200e3], [20, 250e3], [40, 300e3], [75, 350e3], [100, 400e3], [Infinity, 450e3]];
 const SORTS = {
   // Сначала планеты с полным складом: они простаивают. Дальше — по добыче.
   loot: { name: "По добыче", compare: (a, b) => (b.full.some(Boolean) - a.full.some(Boolean)) || b.total - a.total },
@@ -214,6 +216,14 @@ function deathStars(task) {
 // Защита неизвестна (только неполные отчёты) — не считаем цель открытой.
 const guarded = v => v.report.detailsUnknown || v.guards.fleet + v.guards.defense > 0;
 
+/** Фильтр planet: без защиты, в галактике origin, добыча в дейтерии не меньше порога по удалённости в системах. */
+function fitsPlanet(v, origin) {
+  const a = SK.parseCoords(origin.coords), b = SK.parseCoords(v.report.coords);
+  if (a.g !== b.g || guarded(v)) return false;
+  const systems = Math.abs(a.s - b.s);
+  return v.deut >= PLANET_MIN_DEUT.find(([upTo]) => systems <= upTo)[1];
+}
+
 function unitTable(title, units) {
   const rows = Object.entries(units);
   if (!rows.length) return "";
@@ -281,13 +291,16 @@ function card(v, now) {
 function renderTargets(now) {
   const all = Object.values(targets);
   const origin = distOrigin();
+  // Без своих планет подбирать не для чего — как «Все цели».
+  const forPlanet = settings.filter === "planet" && origin;
   const views = all.map(r => targetView(r, now, origin))
-    .filter(v => settings.filter === "all" || (settings.filter === "guarded") === guarded(v))
+    .filter(v => forPlanet ? fitsPlanet(v, origin)
+      : settings.filter === "all" || settings.filter === "planet" || (settings.filter === "guarded") === guarded(v))
     .filter(v => !settings.onlyFull || v.full.some(Boolean))
     .filter(v => !settings.onlyIncomplete || v.report.detailsUnknown)
     .filter(v => v.total >= settings.minLoot * 1000)
     .filter(v => v.deut >= settings.minDeut * 1000)
-    .sort((SORTS[settings.sort] || SORTS.loot).compare);
+    .sort((forPlanet ? SORTS.distance : SORTS[settings.sort] || SORTS.loot).compare);
   const pages = Math.max(1, Math.ceil(views.length / settings.pageSize));
   page = Math.min(Math.max(1, page), pages);
   const from = (page - 1) * settings.pageSize;
@@ -670,7 +683,9 @@ function renderSettings() {
   $("min-loot").value = settings.minLoot || "";
   $("min-deut").value = settings.minDeut || "";
   const origin = distOrigin();
-  $("dist-from").hidden = settings.sort !== "distance" || !origin;
+  const forPlanet = settings.filter === "planet" && !!origin;
+  $("sort").disabled = forPlanet;  // подходящие для планеты — всегда по расстоянию от неё
+  $("dist-from").hidden = !(settings.sort === "distance" || forPlanet) || !origin;
   $("dist-from").innerHTML = settings.planets.map(p =>
     `<option value="${esc(p.coords)}">от ${esc(p.coords)}${p.name ? " " + esc(p.name) : ""}</option>`).join("");
   if (origin) $("dist-from").value = origin.coords;
