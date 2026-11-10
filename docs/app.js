@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
   activeStrong: false,   // показывать сильных (S)
   activeNoob: false,     // показывать слабых (N)
   activePlayer: "",      // часть ника
+  showHidden: false,     // в целях — только скрытые по карте (активные, удалённые, исчезнувшие)
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
 const PAGE_SIZES = [10, 20, 50];
@@ -173,27 +174,70 @@ function currentShip() {
 const isInactive = status => /i/i.test(status || "");
 const systemOf = coords => coords.slice(0, coords.lastIndexOf(":"));
 
-/** Позиция по карте: null — система не просмотрена, { free: true } — позиция свободна, иначе запись позиции. */
-function seen(coords) {
-  if (!galaxy.systems[systemOf(coords)]) return null;
-  return galaxy.planets[coords] || { free: true };
+/**
+ * Позиция по карте: null — статус неизвестен, { free: true } — позиция свободна, иначе запись позиции
+ * (deleted — планета удалена, manual — время ручной правки). Ручная правка действует и в непросмотренной системе.
+ * Отчёт `reportTime` новее просмотра системы, где позиция была пуста, — там новая колония: статус неизвестен.
+ */
+function seen(coords, reportTime = 0) {
+  const p = galaxy.planets[coords], at = galaxy.systems[systemOf(coords)];
+  if (p?.manual || (p && at)) return p;
+  return at && reportTime <= at ? { free: true } : null;
 }
 
-/** Цель для налёта: игрок неактивен или система ещё не просмотрена. */
-const raidable = s => !s || (!s.free && isInactive(s.status));
+/** Цель для налёта: игрок неактивен или статус неизвестен. */
+const raidable = s => !s || (!s.free && !s.deleted && isInactive(s.status));
 
-/** Добавить карту из файла: по каждой системе остаётся более свежий просмотр. Возвращает число обновлённых систем. */
+/**
+ * Добавить карту из файла: по каждой системе остаётся более свежий просмотр, ручная правка позиции —
+ * если она новее просмотра. Возвращает число обновлённых систем и пришедших правок.
+ */
 function mergeGalaxy(from) {
-  const fresh = new Set(Object.entries(from?.systems || {}).filter(([gs, at]) => (galaxy.systems[gs] || 0) < at).map(([gs]) => gs));
-  if (!fresh.size) return 0;
-  galaxy = {
-    systems: { ...galaxy.systems, ...Object.fromEntries([...fresh].map(gs => [gs, from.systems[gs]])) },
-    planets: Object.fromEntries([
-      ...Object.entries(galaxy.planets).filter(([c]) => !fresh.has(systemOf(c))),
-      ...Object.entries(from.planets || {}).filter(([c]) => fresh.has(systemOf(c))),
-    ]),
-  };
-  return fresh.size;
+  const sys = from?.systems || {};
+  const fresh = new Set(Object.keys(sys).filter(gs => (galaxy.systems[gs] || 0) < sys[gs]));
+  const planets = {};
+  for (const [c, p] of Object.entries(galaxy.planets)) {
+    const gs = systemOf(c);
+    if (!fresh.has(gs) || p.manual > sys[gs]) planets[c] = p;
+  }
+  let edits = 0;
+  for (const [c, p] of Object.entries(from?.planets || {})) {
+    const gs = systemOf(c), mine = planets[c];
+    if (fresh.has(gs)) { if (!(mine?.manual > sys[gs])) planets[c] = p; }
+    else if (p.manual > (mine?.manual || galaxy.systems[gs] || 0)) { planets[c] = p; edits++; }
+  }
+  galaxy = { systems: { ...galaxy.systems, ...Object.fromEntries([...fresh].map(gs => [gs, sys[gs]])) }, planets };
+  return fresh.size + edits;
+}
+
+/** Ручная правка позиции: mark — moon | deleted | active | S | N, on — включено. */
+function markPlanet(coords, mark, on) {
+  const old = galaxy.planets[coords]
+    || { planet: targets[coords]?.planet || "", player: "", status: "i", moon: false, debris: false, alliance: "" };
+  const p = { ...old, manual: Date.now() };
+  if (mark === "moon") p.moon = on;
+  else if (mark === "deleted") { if (on) p.deleted = true; else delete p.deleted; }
+  else {
+    // Статус собирается заново: i/I (неактивный; буква запоминается в idle, чтобы вернуть её после «активного»),
+    // S, N; отпуск (v) сохраняется.
+    const st = old.status || "", flag = f => mark === f ? on : st.includes(f);
+    const active = mark === "active" ? on : !isInactive(st);
+    const idle = st.match(/[iI]/)?.[0] || old.idle || "i";
+    if (active && isInactive(st)) p.idle = idle;
+    p.status = (active ? "" : idle) + (flag("S") ? "S" : "") + (flag("N") ? "N" : "") + (st.includes("v") ? "v" : "");
+  }
+  galaxy.planets[coords] = p;
+  save({ map: true });
+}
+
+const openEdits = new Set();  // раскрытые «Изменить статус» переживают перерисовку
+
+function statusEditor(coords) {
+  const p = galaxy.planets[coords], st = p?.status || "";
+  const box = (mark, label, on) => `<label class="check"><input type="checkbox" data-mark="${mark}" data-mark-coords="${esc(coords)}"${on ? " checked" : ""}> ${label}</label>`;
+  return `<details data-edit="${esc(coords)}"${openEdits.has(coords) ? " open" : ""}><summary>Изменить статус</summary><div class="row">
+    ${box("moon", "Луна", p?.moon)}${box("deleted", "Удалена", p?.deleted)}${box("active", "Активный", p && !isInactive(st))}
+    ${box("S", "Сильный (S)", st.includes("S"))}${box("N", "Слабый (N)", st.includes("N"))}</div></details>`;
 }
 
 // ---- Цели ----
@@ -215,7 +259,7 @@ function targetView(report, now, origin) {
     full: atArrival.map((v, i) => !report.detailsUnknown && v >= prod.caps[i]),
     guards: SK.guards(report),
     ships: best && SK.shipsNeeded(total, ship, best.dist, settings.speed),
-    seen: seen(report.coords),
+    seen: seen(report.coords, report.time),
   };
 }
 
@@ -311,8 +355,10 @@ function card(v, now) {
         <button class="small danger" data-delete-target="${esc(r.coords)}">Удалить</button></span>
     </div>
     <div class="muted" style="font-size:13px">отчёт ${dateTime(r.time)}, ${age(now - r.time)} назад · ${v.seen
-      ? `${esc(v.seen.player)} (${esc(v.seen.status)})${v.seen.alliance ? " · " + esc(v.seen.alliance) : ""}${v.seen.moon ? " · луна" : ""}`
-      : '<span class="pill warn">статус неизвестен: система не просмотрена</span>'}</div>
+      ? `${esc(v.seen.player || "—")} (${esc(v.seen.status)})${v.seen.alliance ? " · " + esc(v.seen.alliance) : ""}${v.seen.moon ? " · луна" : ""}`
+        + (v.seen.manual ? ` · изменено ${dateTime(v.seen.manual)}` : "")
+      : `<span class="pill warn">статус неизвестен: ${galaxy.systems[systemOf(r.coords)] ? "отчёт новее карты" : "система не просмотрена"}</span>`}</div>
+    ${statusEditor(r.coords)}
     <div class="spread"><span><span class="loot">${fmtShort(v.total)}</span> <span class="muted num">≈ ${fmtShort(v.deut)} дейт.</span></span><span>${pills}</span></div>
     <div class="res">${SK.RESOURCES.map((n, i) => `<div>${n}<b>${fmt(v.loot[i])}</b></div>`).join("")}</div>
     <div class="route">${route}</div>
@@ -341,9 +387,10 @@ function renderTargets(now) {
   const origin = distOrigin();
   // Без своих планет подбирать не для чего — как «Все цели».
   const forPlanet = settings.filter === "planet" && origin;
-  // Только неактивные: активных и исчезнувшие по карте планеты не показываем ни в одном фильтре.
-  const inactive = all.filter(r => raidable(seen(r.coords)));
-  const hidden = all.length - inactive.length;
+  // Только неактивные: активных, удалённых и исчезнувшие по карте планеты не показываем ни в одном фильтре —
+  // кроме режима «Показать скрытые» (только они: проверить и вернуть статус).
+  const inactive = all.filter(r => raidable(seen(r.coords, r.time)) !== settings.showHidden);
+  const hidden = settings.showHidden ? 0 : all.length - inactive.length;
   const views = inactive.map(r => targetView(r, now, origin))
     .filter(v => forPlanet ? fitsPlanet(v, origin)
       : settings.filter === "all" || settings.filter === "planet" || (settings.filter === "guarded") === guarded(v))
@@ -619,11 +666,14 @@ const ACTIVE_PAGE = 10;
 const activeOrigin = () => settings.planets.find(p => p.coords === settings.activeFrom) || settings.planets[0];
 const byCoordsStr = (a, b) => { const x = SK.parseCoords(a), y = SK.parseCoords(b); return x.g - y.g || x.s - y.s || x.p - y.p; };
 
-/** Планеты активных игроков, кроме своих (свой ник — владелец своих планет на карте) и станций альянсов (без игрока). */
+/**
+ * Планеты активных игроков, кроме своих (свой ник — владелец своих планет на карте), удалённых
+ * и станций альянсов (без игрока; ручная правка без игрока — показываем).
+ */
 function activePlanets() {
   const mine = new Set(settings.planets.map(p => galaxy.planets[p.coords]?.player).filter(Boolean));
-  return Object.entries(galaxy.planets).map(([coords, p]) => ({ coords, ...p }))
-    .filter(p => p.player && !isInactive(p.status) && !mine.has(p.player));
+  return Object.entries(galaxy.planets).map(([coords, p]) => ({ coords, ...p, player: p.player || "" }))
+    .filter(p => (p.player || p.manual) && !p.deleted && !isInactive(p.status) && !mine.has(p.player));
 }
 
 function renderActive() {
@@ -660,11 +710,12 @@ function renderActive() {
   $("active-page").textContent = `${activePage} из ${pages}`;
   $("active-prev").disabled = activePage <= 1;
   $("active-next").disabled = activePage >= pages;
-  $("active").innerHTML = shown.length ? shown.map(p => `<div class="item">
+  $("active").innerHTML = shown.length ? shown.map(p => `<div class="item" style="flex-wrap:wrap">
       <span class="grow"><b class="num">${esc(p.coords)}</b> ${esc(p.planet || "")}
         ${p.moon ? '<span class="pill">луна</span>' : ""} ${p.debris ? '<span class="pill">обломки</span>' : ""}<br>
-        <span class="muted">${esc(p.player)}${p.status ? ` (${esc(p.status)})` : ""}${p.alliance ? " · " + esc(p.alliance) : ""}</span></span>
-      <span class="muted num" style="font-size:13px;text-align:right">${byDist ? `${fmt(p.dist)}<br>` : ""}${dateTime(p.at)}</span>
+        <span class="muted">${esc(p.player || "—")}${p.status ? ` (${esc(p.status)})` : ""}${p.alliance ? " · " + esc(p.alliance) : ""}</span></span>
+      <span class="muted num" style="font-size:13px;text-align:right">${byDist ? `${fmt(p.dist)}<br>` : ""}${dateTime(p.manual || p.at)}${p.manual ? "<br>вручную" : ""}</span>
+      <div style="flex-basis:100%">${statusEditor(p.coords)}</div>
     </div>`).join("")
     : `<p class="empty">${all.length ? "Нет планет для выбранных фильтров." : "Нет данных об активных игроках."}</p>`;
 }
@@ -679,6 +730,7 @@ function renderSettings() {
   $("sort").value = settings.sort;
   $("only-full").checked = settings.onlyFull;
   $("only-incomplete").checked = settings.onlyIncomplete;
+  $("show-hidden").checked = settings.showHidden;
   $("min-loot").value = settings.minLoot || "";
   $("min-deut").value = settings.minDeut || "";
   const origin = distOrigin();
@@ -810,6 +862,8 @@ document.addEventListener("change", e => {
     const ship = settings.ships.find(s => s.id === el.dataset.ship);
     ship[field] = ["base", "capacity", "consumption"].includes(field) ? Math.max(0, +el.value || 0) : el.value.trim();
     save();
+  } else if (el.dataset.mark) {
+    markPlanet(el.dataset.markCoords, el.dataset.mark, el.checked);
   }
 });
 
@@ -828,6 +882,7 @@ $("sort").addEventListener("change", e => view({ sort: e.target.value }));
 $("dist-from").addEventListener("change", e => view({ distFrom: e.target.value }));
 $("only-full").addEventListener("change", e => view({ onlyFull: e.target.checked }));
 $("only-incomplete").addEventListener("change", e => view({ onlyIncomplete: e.target.checked }));
+$("show-hidden").addEventListener("change", e => view({ showHidden: e.target.checked }));
 $("min-loot").addEventListener("change", e => view({ minLoot: Math.max(0, +e.target.value || 0) }));
 $("min-deut").addEventListener("change", e => view({ minDeut: Math.max(0, +e.target.value || 0) }));
 $("page-size").addEventListener("change", e => view({ pageSize: +e.target.value }));
@@ -889,9 +944,10 @@ document.addEventListener("click", e => {
   }
 });
 
-$("targets").addEventListener("toggle", e => {
-  const c = e.target.dataset.coords;
-  if (c) e.target.open ? openDetails.add(c) : openDetails.delete(c);
+for (const list of ["targets", "active"]) $(list).addEventListener("toggle", e => {
+  const { coords, edit } = e.target.dataset;
+  if (coords) e.target.open ? openDetails.add(coords) : openDetails.delete(coords);
+  if (edit) e.target.open ? openEdits.add(edit) : openEdits.delete(edit);
 }, true);
 
 // ---- Резервная копия файлом ----
@@ -974,7 +1030,7 @@ $("import-merge").addEventListener("click", () => {
   const { put } = mergeReports(pendingImport.targets);
   const systems = mergeGalaxy(pendingImport.galaxy);
   $("import-actions").hidden = true;
-  setStatus("data-status", `Добавлено и обновлено отчётов: ${fmt(put.length)}, систем карты: ${fmt(systems)}. `
+  setStatus("data-status", `Добавлено и обновлено отчётов: ${fmt(put.length)}, систем и правок карты: ${fmt(systems)}. `
     + "Свои планеты и настройки не менялись.", "ok");
   pendingImport = null;
   save({ put, map: systems > 0 });
