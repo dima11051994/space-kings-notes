@@ -228,7 +228,31 @@ const SK = (() => {
       .sort((a, b) => a.seconds - b.seconds);
   }
 
-  return { parseReports, mergeReport, parseCoords, production, nextMines, colonyPlan, inDeut, resourcesAt, guards, fuelPerShip, shipsNeeded,
+  /**
+   * Слить карту галактики `from` в `into`. Карта — { systems: {"г:с": время просмотра}, planets: {"г:с:п": позиция} },
+   * у позиции с ручной правкой manual — время правки. По каждой системе остаётся более свежий просмотр,
+   * ручная правка позиции — если она новее просмотра. `into` не меняется.
+   * Возвращает { galaxy, count, edited }: новую карту, число обновлённых систем и правок, координаты пришедших правок.
+   */
+  function mergeGalaxy(into, from) {
+    const systemOf = c => c.slice(0, c.lastIndexOf(":"));
+    const sys = from?.systems || {};
+    const fresh = new Set(Object.keys(sys).filter(gs => (into.systems[gs] || 0) < sys[gs]));
+    const planets = {}, edited = [];
+    for (const [c, p] of Object.entries(into.planets)) {
+      const gs = systemOf(c);
+      if (!fresh.has(gs) || p.manual > sys[gs]) planets[c] = p;
+    }
+    for (const [c, p] of Object.entries(from?.planets || {})) {
+      const gs = systemOf(c), mine = planets[c];
+      if (fresh.has(gs)) { if (!(mine?.manual > sys[gs])) planets[c] = p; }
+      else if (p.manual > (mine?.manual || into.systems[gs] || 0)) { planets[c] = p; edited.push(c); }
+    }
+    const systems = { ...into.systems, ...Object.fromEntries([...fresh].map(gs => [gs, sys[gs]])) };
+    return { galaxy: { systems, planets }, count: fresh.size + edited.length, edited };
+  }
+
+  return { parseReports, mergeReport, mergeGalaxy, parseCoords, production, nextMines, colonyPlan, inDeut, resourcesAt, guards, fuelPerShip, shipsNeeded,
            distance, shipSpeed, flightSeconds, routes, SLOT_TEMP, DRIVES, RESOURCES, HARMLESS };
 })();
 

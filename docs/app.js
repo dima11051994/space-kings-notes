@@ -188,26 +188,11 @@ function seen(coords, reportTime = 0) {
 /** Цель для налёта: игрок неактивен или статус неизвестен. */
 const raidable = s => !s || (!s.free && !s.deleted && isInactive(s.status));
 
-/**
- * Добавить карту из файла: по каждой системе остаётся более свежий просмотр, ручная правка позиции —
- * если она новее просмотра. Возвращает число обновлённых систем и пришедших правок.
- */
+/** Добавить карту из файла (SK.mergeGalaxy). Возвращает число обновлённых систем и пришедших правок. */
 function mergeGalaxy(from) {
-  const sys = from?.systems || {};
-  const fresh = new Set(Object.keys(sys).filter(gs => (galaxy.systems[gs] || 0) < sys[gs]));
-  const planets = {};
-  for (const [c, p] of Object.entries(galaxy.planets)) {
-    const gs = systemOf(c);
-    if (!fresh.has(gs) || p.manual > sys[gs]) planets[c] = p;
-  }
-  let edits = 0;
-  for (const [c, p] of Object.entries(from?.planets || {})) {
-    const gs = systemOf(c), mine = planets[c];
-    if (fresh.has(gs)) { if (!(mine?.manual > sys[gs])) planets[c] = p; }
-    else if (p.manual > (mine?.manual || galaxy.systems[gs] || 0)) { planets[c] = p; edits++; }
-  }
-  galaxy = { systems: { ...galaxy.systems, ...Object.fromEntries([...fresh].map(gs => [gs, sys[gs]])) }, planets };
-  return fresh.size + edits;
+  const r = SK.mergeGalaxy(galaxy, from);
+  galaxy = r.galaxy;
+  return r.count;
 }
 
 /** Ручная правка позиции: mark — moon | deleted | active | S | N, on — включено. */
