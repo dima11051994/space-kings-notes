@@ -166,6 +166,16 @@
       <p class="muted" style="margin:0 0 8px;font-size:13px">Следующие уровни шахт на всех своих планетах, от быстрой окупаемости к медленной:
         за сколько часов прирост от уровня вернёт его стоимость. Уровни шахт и температура — в «Моих планетах».
         Ресурсы в пересчёте на металл: 1 дейтерий = 2 кристалла = 4 металла. Энергия не учитывается.</p>
+      <div class="grid3">
+        <label class="check"><input type="checkbox" id="bonus-premium"> Премиум (+50% выработки)</label>
+        <label>Бонус альянса, % <input id="bonus-alliance" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label>Бонус станций, % <input id="bonus-stations" type="number" min="0" step="any" inputmode="decimal"></label>
+      </div>
+      <p class="muted" id="bonus-total" style="margin:0 0 8px;font-size:13px"></p>
+      <div class="row">
+        <label>Колонизационная технология, уровень <input id="colonization" type="number" min="0" inputmode="numeric"></label>
+      </div>
+      <p id="colony-advice" style="margin:0 0 8px"></p>
       <table class="mines">
         <thead><tr><th>№</th><th>Планета</th><th>Шахта</th><th>Стоимость М / К</th><th>В дейтерии</th><th>Окупаемость</th></tr></thead>
         <tbody id="mines-body"></tbody>

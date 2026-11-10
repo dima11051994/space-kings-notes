@@ -116,10 +116,13 @@ const SK = (() => {
       prod: (L, temp) => growth(L, 50) * (1.36 - 0.004 * temp) },
   ];
 
-  /** За сколько часов прирост от уровня вернёт его стоимость, всё в пересчёте на металл. */
-  function mineLevel(m, level, temp) {
+  /**
+   * За сколько часов прирост от уровня вернёт его стоимость, всё в пересчёте на металл.
+   * bonus — множитель выработки аккаунта (премиум, альянс, станции), см. formulas.md.
+   */
+  function mineLevel(m, level, temp, bonus = 1) {
     const cost = m.cost.map(c => c * m.factor ** (level - 1));
-    const gain = m.prod(level, temp) - m.prod(level - 1, temp);
+    const gain = (m.prod(level, temp) - m.prod(level - 1, temp)) * bonus;
     const deut = inDeut(cost);
     return { mine: m.name, level, cost, deut, gain, hours: gain > 0 ? deut * VALUE[2] / (gain * VALUE[m.res]) : Infinity };
   }
@@ -130,12 +133,36 @@ const SK = (() => {
    * planets: [{levels: [металл, кристалл, дейтерий], temp}]. Окупаемость растёт с уровнем,
    * поэтому уровень попадает в список только после предыдущего уровня той же шахты.
    */
-  function nextMines(planets, count) {
+  function nextMines(planets, count, bonus = 1) {
     return planets.flatMap(p => MINES.flatMap((m, i) => {
       const from = p.levels[i] || 0;
       return Array.from({ length: Math.max(0, m.max - from) },
-        (_, k) => ({ planet: p, ...mineLevel(m, from + k + 1, p.temp) }));
+        (_, k) => ({ planet: p, ...mineLevel(m, from + k + 1, p.temp, bonus) }));
     })).sort((a, b) => a.hours - b.hours).slice(0, count);
+  }
+
+  // Колонизационная технология: цена 1-го уровня, каждый следующий ×3. Считаем, что уровень даёт ещё одну планету (не проверено).
+  const COLONIZATION = [2000, 4000, 2000];
+  // Шахты новой колонии в той же пропорции, что на старых планетах: металл L, кристалл L−5, дейтерий L−3.
+  const COLONY_MIX = [0, 5, 3];
+
+  /**
+   * Новая колония как вложение: технология `level` и шахты с нуля до уровня, при котором окупаемость всего пакета наименьшая.
+   * Энергия и колонизатор не учитываются (1–3% цены). Цены — в пересчёте на дейтерий, доход — дейтерия в час, окупаемость — часы.
+   */
+  function colonyPlan(level, temp, bonus = 1) {
+    const tech = inDeut(COLONIZATION.map(c => c * 3 ** (level - 1)));
+    let best = null;
+    for (let L = 5; L <= 45; L++) {
+      const levels = COLONY_MIX.map(d => Math.max(0, L - d));
+      let cost = tech, income = 0;
+      MINES.forEach((m, i) => {
+        for (let k = 1; k <= levels[i]; k++) cost += inDeut(m.cost.map(c => c * m.factor ** (k - 1)));
+        income += (NATURAL[m.res] + m.prod(levels[i], temp)) * bonus * VALUE[m.res] / VALUE[2];
+      });
+      if (!best || cost / income < best.hours) best = { level, tech, levels, cost, income, hours: cost / income };
+    }
+    return best;
   }
 
   const RESOURCES = ["Металл", "Кристалл", "Дейтерий"];
@@ -201,7 +228,7 @@ const SK = (() => {
       .sort((a, b) => a.seconds - b.seconds);
   }
 
-  return { parseReports, mergeReport, parseCoords, production, nextMines, inDeut, resourcesAt, guards, fuelPerShip, shipsNeeded,
+  return { parseReports, mergeReport, parseCoords, production, nextMines, colonyPlan, inDeut, resourcesAt, guards, fuelPerShip, shipsNeeded,
            distance, shipSpeed, flightSeconds, routes, SLOT_TEMP, DRIVES, RESOURCES, HARMLESS };
 })();
 

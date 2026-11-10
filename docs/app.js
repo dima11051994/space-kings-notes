@@ -24,6 +24,9 @@ const DEFAULT_SETTINGS = {
   distFrom: "",   // своя планета, от которой сортировать по расстоянию
   pageSize: 20,
   minesOpen: false,  // показан топ шахт
+  // Бонусы к выработке шахт и естественного прироста (экран «Производство» в игре): премиум +50%, альянс и станции — в процентах.
+  prodBonus: { premium: true, alliance: 10, stations: 10 },
+  colonization: 9,   // уровень колонизационной технологии
   attackOpen: false, // показан подбор атаки
   attackFrom: "",    // своя планета, с которой лететь в подборе атаки
   attackDs: true,    // подбирать составы со звёздами смерти
@@ -75,6 +78,7 @@ function normalizeSettings(saved) {
   s.ships = s.ships.map(ship => ({ ...(ship.id === "mega" ? MEGA : { capacity: 0, consumption: 0 }), ...ship }));
   s.backup = { ...DEFAULT_SETTINGS.backup, ...s.backup };
   s.techs = { ...s.techs };
+  s.prodBonus = { ...DEFAULT_SETTINGS.prodBonus, ...s.prodBonus };
   if (!s.backup.at) s.backup.at = Date.now();  // отсчёт — с первого запуска
   if (!PAGE_SIZES.includes(s.pageSize)) s.pageSize = DEFAULT_SETTINGS.pageSize;
   return s;
@@ -350,16 +354,42 @@ function renderMines() {
   $("mines-toggle").setAttribute("aria-expanded", settings.minesOpen);
   $("mines").hidden = !settings.minesOpen;
   if (!settings.minesOpen) return;
+  const b = settings.prodBonus;
+  const bonus = 1 + (b.premium ? 0.5 : 0) + (b.alliance + b.stations) / 100;
+  $("bonus-premium").checked = b.premium;
+  $("bonus-alliance").value = b.alliance;
+  $("bonus-stations").value = b.stations;
+  $("colonization").value = settings.colonization;
+  $("bonus-total").textContent = `Выработка ×${bonus.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}: окупаемость ниже уже с бонусами.`;
   // Пустая температура — худшая для слота, как у целей.
   const planets = settings.planets.map(p => ({
     label: p.name || p.coords,
     levels: MINE_FIELDS.map(([f]) => p[f] || 0),
     temp: p.temp ?? SK.SLOT_TEMP[SK.parseCoords(p.coords).p],
   }));
+  const top = SK.nextMines(planets, 20, bonus);
   $("mines-body").innerHTML = planets.length
-    ? SK.nextMines(planets, 20).map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.planet.label)}</td><td>${r.mine} ${r.level}</td>
+    ? top.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.planet.label)}</td><td>${r.mine} ${r.level}</td>
         <td>${fmtShort(r.cost[0])} / ${fmtShort(r.cost[1])}</td><td>${fmtShort(r.deut)}</td><td>${hours(r.hours)}</td></tr>`).join("")
     : `<tr><td colspan="6" class="empty">Добавьте свои планеты ниже, с уровнями шахт и температурой.</td></tr>`;
+  renderColonyAdvice(planets, top[0], bonus);
+}
+
+/** Пора ли изучать следующий уровень колонизации: окупаемость новой колонии против лучшей шахты на старых планетах. */
+function renderColonyAdvice(planets, bestMine, bonus) {
+  const el = $("colony-advice");
+  if (!planets.length || !bestMine) { el.textContent = ""; return; }
+  // Колонию считаем на самой холодной своей планете: так обычно и выбирают позицию (больше дейтерия).
+  const temp = Math.min(...planets.map(p => p.temp));
+  const c = SK.colonyPlan(settings.colonization + 1, temp, bonus);
+  const plan = `Колонизация ${c.level}: технология ${fmtShort(c.tech)} в дейтерии, с шахтами колонии до ${c.levels.join(" / ")} — `
+    + `${fmtShort(c.cost)}, доход ${fmtShort(c.income)} дейтерия в час, окупаемость ${hours(c.hours)}.`;
+  const due = bestMine.hours >= c.hours;
+  el.className = due ? "status ok" : "muted";
+  el.textContent = due
+    ? `Пора изучать колонизацию ${c.level}: лучшая шахта окупается за ${hours(bestMine.hours)}, а новая колония — быстрее. ${plan}`
+    : `Колонизация ${c.level} пока не выгодна: шахты окупаются быстрее (лучшая — ${hours(bestMine.hours)}). `
+      + `Изучать, когда окупаемость лучшей шахты дойдёт до ${hours(c.hours)}. ${plan}`;
 }
 
 // ---- Подбор атаки ----
@@ -832,7 +862,12 @@ $("only-incomplete").addEventListener("change", e => view({ onlyIncomplete: e.ta
 $("min-loot").addEventListener("change", e => view({ minLoot: Math.max(0, +e.target.value || 0) }));
 $("min-deut").addEventListener("change", e => view({ minDeut: Math.max(0, +e.target.value || 0) }));
 $("page-size").addEventListener("change", e => view({ pageSize: +e.target.value }));
-$("mines-toggle").addEventListener("click", () => { settings.minesOpen = !settings.minesOpen; save({ changed: false }); });
+$("bonus-premium").addEventListener("change", e => { settings.prodBonus.premium = e.target.checked; save(); });
+for (const k of ["alliance", "stations"]) {
+  $(`bonus-${k}`).addEventListener("change", e => { settings.prodBonus[k] = Math.max(0, +e.target.value || 0); save(); });
+}
+$("colonization").addEventListener("change", e => { settings.colonization = Math.max(0, Math.floor(+e.target.value || 0)); save(); });
+$("mines-toggle").addEventListener("click",() => { settings.minesOpen = !settings.minesOpen; save({ changed: false }); });
 $("attack-toggle").addEventListener("click", () => { settings.attackOpen = !settings.attackOpen; save({ changed: false }); });
 $("attack-from").addEventListener("change", e => { settings.attackFrom = e.target.value; save({ changed: false }); });
 $("attack-ds").addEventListener("change", e => { settings.attackDs = e.target.checked; save({ changed: false }); });
