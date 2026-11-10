@@ -89,10 +89,7 @@
   .planet .row input { flex: 1 1 0; }
   .planet .row input.num { flex: 0 1 8em; }
   .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-  .attack { display: grid; gap: 10px; }
-  .attack h3 { font-size: 14px; margin: 4px 0 0; }
-  .attack .grid3 { align-items: end; }
-  .attack .grid3 label { overflow-wrap: anywhere; }
+  .item .grow { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
   .profit { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 700; }
 </style>
 </head>
@@ -209,57 +206,19 @@
 
   <section aria-labelledby="h-data">
     <h2 id="h-data">Резервная копия</h2>
-    <p class="muted" style="margin:0;font-size:14px">Все данные хранятся только в этом браузере. Копия — один файл JSON со всеми отчётами, планетами и настройками.</p>
+    <p class="muted" style="margin:0;font-size:14px">Все данные хранятся только в этом браузере. Копия — один файл JSON со всеми отчётами, планетами, настройками и картой галактики.</p>
     <div class="row">
       <button id="backup-download">Скачать файл</button>
       <button id="backup-share" hidden>Отправить файл…</button>
       <label class="file-button">Загрузить файл<input type="file" id="backup-file" accept=".json,application/json" class="visually-hidden"></label>
     </div>
     <div class="row" id="import-actions" hidden>
-      <button class="primary" id="import-merge">Добавить отчёты из файла</button>
+      <button class="primary" id="import-merge">Добавить из файла</button>
       <button class="danger" id="import-replace">Заменить все данные</button>
     </div>
     <span class="status" id="data-status" role="status"></span>
   </section>
 
-  <section aria-labelledby="h-attack">
-    <h2 id="h-attack">Подбор атаки</h2>
-    <div class="row">
-      <button id="attack-toggle" aria-expanded="false" aria-controls="attack">Показать</button>
-    </div>
-    <div id="attack" class="attack" hidden>
-      <p class="muted" style="margin:0;font-size:13px">10 самых выгодных составов флота против цели: выгода = добыча + обломки − потери − топливо,
-        всё в металле (1 дейтерий = 2 кристалла = 4 металла). Перебираются ~70 составов, лучших по game-data/attack-study,
-        мега-транспорты добавляются под добычу. Мои технологии и скорость — из настроек выше; добыча — доля «Добыча, %» от ресурсов в отчёте.</p>
-      <textarea id="attack-report" placeholder="Вставьте шпионский отчёт цели — поля ниже заполнятся"></textarea>
-      <div class="row">
-        <button id="attack-fill">Заполнить из отчёта</button>
-        <button id="attack-clear">Очистить</button>
-        <span class="status" id="attack-fill-status" role="status"></span>
-      </div>
-      <div class="grid2">
-        <label>Лететь с планеты <select id="attack-from"></select></label>
-        <label>Цель <input id="attack-to" class="num" placeholder="8:306:4" inputmode="numeric"></label>
-      </div>
-      <div class="grid3">
-        <label>Металл <input type="number" min="0" id="attack-res-0" class="num" inputmode="numeric" placeholder="0"></label>
-        <label>Кристалл <input type="number" min="0" id="attack-res-1" class="num" inputmode="numeric" placeholder="0"></label>
-        <label>Дейтерий <input type="number" min="0" id="attack-res-2" class="num" inputmode="numeric" placeholder="0"></label>
-      </div>
-      <h3>Оборона цели</h3>
-      <div class="grid3" id="attack-defense"></div>
-      <h3>Флот цели</h3>
-      <div class="grid3" id="attack-fleet"></div>
-      <span class="muted" style="font-size:13px" id="attack-techs"></span>
-      <label class="check"><input type="checkbox" id="attack-ds"> Использовать звёзды смерти</label>
-      <div class="row">
-        <button class="primary" id="attack-run">Подобрать</button>
-        <button id="attack-stop" hidden>Стоп</button>
-        <span class="status" id="attack-status" role="status"></span>
-      </div>
-      <div class="list" id="attack-results"></div>
-    </div>
-  </section>
   <section aria-labelledby="h-defense">
     <h2 id="h-defense">Памятка: оборона на 100 плазм</h2>
     <table>
@@ -289,6 +248,31 @@
     </div>
     <div class="muted" style="font-size:13px" id="cheap-target"></div>
     <div class="list" id="cheap-results"></div>
+  </section>
+
+  <section aria-labelledby="h-active">
+    <h2 id="h-active">Активные игроки</h2>
+    <p class="muted" style="margin:0;font-size:13px" id="galaxy-info"></p>
+    <div class="row">
+      <select id="active-sort" aria-label="Сортировка активных планет" style="width:auto">
+        <option value="coords">По координатам</option>
+        <option value="distance">По расстоянию</option>
+      </select>
+      <select id="active-from" aria-label="Расстояние от своей планеты" style="width:auto" hidden></select>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="active-strong"> Сильные (S)</label>
+      <label class="check"><input type="checkbox" id="active-noob"> Слабые (N)</label>
+      <input id="active-player" list="active-players" placeholder="Ник игрока" aria-label="Фильтр по игроку" style="flex:1 1 10em;width:auto">
+      <datalist id="active-players"></datalist>
+    </div>
+    <span class="muted num" id="active-count"></span>
+    <div class="list" id="active"></div>
+    <nav class="row pager" id="active-pager" aria-label="Страницы активных планет" hidden>
+      <button id="active-prev">‹ Назад</button>
+      <span class="num" id="active-page"></span>
+      <button id="active-next">Вперёд ›</button>
+    </nav>
   </section>
 </main>
 <script src="core.js"></script>

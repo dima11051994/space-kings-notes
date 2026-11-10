@@ -1,5 +1,5 @@
 // Интерфейс. Данные — в IndexedDB этого браузера: каждый отчёт отдельной записью, настройки — одной.
-// Расчёты — core.js, бой и звёзды смерти — battle.js (в фоне, ds-worker.js), подбор атаки — attack.js (в фоне, attack-worker.js),
+// Расчёты — core.js, бой и звёзды смерти — battle.js (в фоне, ds-worker.js), модель атаки — attack.js,
 // самый дешёвый флот — cheapest.js (оценки флотов — в потоках cheapest-worker.js).
 const DB_NAME = "space-kings-recon";
 const LEGACY_KEY = "space-kings-recon-v1";  // localStorage старых версий, переносится при первом запуске
@@ -27,10 +27,13 @@ const DEFAULT_SETTINGS = {
   // Бонусы к выработке шахт и естественного прироста (экран «Производство» в игре): премиум +50%, альянс и станции — в процентах.
   prodBonus: { premium: true, alliance: 10, stations: 10 },
   colonization: 9,   // уровень колонизационной технологии
-  attackOpen: false, // показан подбор атаки
-  attackFrom: "",    // своя планета, с которой лететь в подборе атаки
-  attackDs: true,    // подбирать составы со звёздами смерти
   cheapFrom: "",     // своя планета, с которой лететь в подборе самого дешёвого флота
+  // Список активных планет по карте галактики.
+  activeSort: "coords",  // coords | distance
+  activeFrom: "",        // своя планета, от которой считать расстояние
+  activeStrong: false,   // показывать сильных (S)
+  activeNoob: false,     // показывать слабых (N)
+  activePlayer: "",      // часть ника
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
 const PAGE_SIZES = [10, 20, 50];
@@ -67,7 +70,10 @@ const age = ms => { const m = Math.floor(ms / 60000); return m < 60 ? `${m} ми
 
 let settings = normalizeSettings(null);
 let targets = {};   // координаты -> последний шпионский отчёт
+// Карта галактики от бота (bot/sk.js scan): systems {"г:с": время просмотра}, planets {"г:с:п": {planet, moon, debris, player, status, alliance, at}}.
+let galaxy = { systems: {}, planets: {} };
 let page = 1;
+let activePage = 1;
 let db = null;
 let pendingImport = null;
 const openDetails = new Set();  // раскрытые «Расчёт» переживают перерисовку
@@ -79,6 +85,7 @@ function normalizeSettings(saved) {
   s.backup = { ...DEFAULT_SETTINGS.backup, ...s.backup };
   s.techs = { ...s.techs };
   s.prodBonus = { ...DEFAULT_SETTINGS.prodBonus, ...s.prodBonus };
+  for (const k of ["attackOpen", "attackFrom", "attackDs"]) delete s[k];  // убранный подбор атаки
   if (!s.backup.at) s.backup.at = Date.now();  // отсчёт — с первого запуска
   if (!PAGE_SIZES.includes(s.pageSize)) s.pageSize = DEFAULT_SETTINGS.pageSize;
   return s;
@@ -97,8 +104,11 @@ function openDb() {
   return done(req);
 }
 
-/** Одна транзакция: настройки, добавленные и удалённые отчёты; `clear` — сначала стереть все отчёты. */
-function write({ put = [], remove = [], clear = false } = {}) {
+/**
+ * Одна транзакция: настройки, добавленные и удалённые отчёты; `clear` — сначала стереть все отчёты;
+ * `map` — записать карту галактики (она хранится отдельно от отчётов, одной записью).
+ */
+function write({ put = [], remove = [], clear = false, map = false } = {}) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(["targets", "meta"], "readwrite");
     const store = tx.objectStore("targets");
@@ -106,6 +116,7 @@ function write({ put = [], remove = [], clear = false } = {}) {
     for (const r of put) store.put(r);
     for (const c of remove) store.delete(c);
     tx.objectStore("meta").put(settings, "settings");
+    if (map) tx.objectStore("meta").put(galaxy, "galaxy");
     tx.oncomplete = resolve;
     tx.onerror = tx.onabort = () => reject(tx.error);
   });
@@ -128,6 +139,7 @@ async function init() {
   if (saved) {
     settings = normalizeSettings(saved);
     for (const r of await done(db.transaction("targets").objectStore("targets").getAll())) targets[r.coords] = r;
+    galaxy = await done(db.transaction("meta").objectStore("meta").get("galaxy")) || galaxy;
     return;
   }
   // Первый запуск этой версии: перенести данные из localStorage, если они есть.
@@ -155,6 +167,35 @@ function currentShip() {
   return settings.ships.find(s => s.id === settings.shipId) || settings.ships[0];
 }
 
+// ---- Карта галактики ----
+
+// Неактивный — в статусе есть i или I; остальные буквы (N, S, v…) не важны.
+const isInactive = status => /i/i.test(status || "");
+const systemOf = coords => coords.slice(0, coords.lastIndexOf(":"));
+
+/** Позиция по карте: null — система не просмотрена, { free: true } — позиция свободна, иначе запись позиции. */
+function seen(coords) {
+  if (!galaxy.systems[systemOf(coords)]) return null;
+  return galaxy.planets[coords] || { free: true };
+}
+
+/** Цель для налёта: игрок неактивен или система ещё не просмотрена. */
+const raidable = s => !s || (!s.free && isInactive(s.status));
+
+/** Добавить карту из файла: по каждой системе остаётся более свежий просмотр. Возвращает число обновлённых систем. */
+function mergeGalaxy(from) {
+  const fresh = new Set(Object.entries(from?.systems || {}).filter(([gs, at]) => (galaxy.systems[gs] || 0) < at).map(([gs]) => gs));
+  if (!fresh.size) return 0;
+  galaxy = {
+    systems: { ...galaxy.systems, ...Object.fromEntries([...fresh].map(gs => [gs, from.systems[gs]])) },
+    planets: Object.fromEntries([
+      ...Object.entries(galaxy.planets).filter(([c]) => !fresh.has(systemOf(c))),
+      ...Object.entries(from.planets || {}).filter(([c]) => fresh.has(systemOf(c))),
+    ]),
+  };
+  return fresh.size;
+}
+
 // ---- Цели ----
 
 function targetView(report, now, origin) {
@@ -174,6 +215,7 @@ function targetView(report, now, origin) {
     full: atArrival.map((v, i) => !report.detailsUnknown && v >= prod.caps[i]),
     guards: SK.guards(report),
     ships: best && SK.shipsNeeded(total, ship, best.dist, settings.speed),
+    seen: seen(report.coords),
   };
 }
 
@@ -268,7 +310,9 @@ function card(v, now) {
       <span class="row">${task ? `<button class="small" data-cheapest="${esc(r.coords)}">Дешёвый флот</button>` : ""}
         <button class="small danger" data-delete-target="${esc(r.coords)}">Удалить</button></span>
     </div>
-    <div class="muted" style="font-size:13px">отчёт ${dateTime(r.time)}, ${age(now - r.time)} назад</div>
+    <div class="muted" style="font-size:13px">отчёт ${dateTime(r.time)}, ${age(now - r.time)} назад · ${v.seen
+      ? `${esc(v.seen.player)} (${esc(v.seen.status)})${v.seen.alliance ? " · " + esc(v.seen.alliance) : ""}${v.seen.moon ? " · луна" : ""}`
+      : '<span class="pill warn">статус неизвестен: система не просмотрена</span>'}</div>
     <div class="spread"><span><span class="loot">${fmtShort(v.total)}</span> <span class="muted num">≈ ${fmtShort(v.deut)} дейт.</span></span><span>${pills}</span></div>
     <div class="res">${SK.RESOURCES.map((n, i) => `<div>${n}<b>${fmt(v.loot[i])}</b></div>`).join("")}</div>
     <div class="route">${route}</div>
@@ -297,7 +341,10 @@ function renderTargets(now) {
   const origin = distOrigin();
   // Без своих планет подбирать не для чего — как «Все цели».
   const forPlanet = settings.filter === "planet" && origin;
-  const views = all.map(r => targetView(r, now, origin))
+  // Только неактивные: активных и исчезнувшие по карте планеты не показываем ни в одном фильтре.
+  const inactive = all.filter(r => raidable(seen(r.coords)));
+  const hidden = all.length - inactive.length;
+  const views = inactive.map(r => targetView(r, now, origin))
     .filter(v => forPlanet ? fitsPlanet(v, origin)
       : settings.filter === "all" || settings.filter === "planet" || (settings.filter === "guarded") === guarded(v))
     .filter(v => !settings.onlyFull || v.full.some(Boolean))
@@ -310,9 +357,9 @@ function renderTargets(now) {
   const from = (page - 1) * settings.pageSize;
   const shown = views.slice(from, from + settings.pageSize);
 
-  $("filter-count").textContent = views.length
+  $("filter-count").textContent = (views.length
     ? `${fmt(from + 1)}–${fmt(from + shown.length)} из ${fmt(views.length)}` + (views.length < all.length ? ` (всего ${fmt(all.length)})` : "")
-    : "";
+    : "") + (hidden ? ` · скрыто активных и исчезнувших: ${fmt(hidden)}` : "");
   $("pager").hidden = pages < 2;
   $("page").innerHTML = Array.from({ length: pages }, (_, i) => `<option value="${i + 1}">${i + 1} из ${pages}</option>`).join("");
   $("page").value = page;
@@ -392,142 +439,8 @@ function renderColonyAdvice(planets, bestMine, bonus) {
       + `Изучать, когда окупаемость лучшей шахты дойдёт до ${hours(c.hours)}. ${plan}`;
 }
 
-// ---- Подбор атаки ----
-
-// Поля юнитов цели: оборона и корабли.
-const ATTACK_DEFENSE = Object.keys(BATTLE.UNITS).filter(n => ATTACK.DEFENSE.has(n));
-const ATTACK_FLEET = Object.keys(BATTLE.UNITS).filter(n => !ATTACK.DEFENSE.has(n));
-let attackTechs = null;   // технологии цели из отчёта; null — считаем равными моим
-let attackWorker = null;  // идёт подбор
-let attackTop = null;     // результат последнего подбора
-
-/** Своя планета, с которой лететь: выбранная или первая. */
-const attackOrigin = () => settings.planets.find(p => p.coords === settings.attackFrom) || settings.planets[0];
-
-function renderAttack() {
-  $("attack-toggle").textContent = settings.attackOpen ? "Скрыть" : "Показать";
-  $("attack-toggle").setAttribute("aria-expanded", settings.attackOpen);
-  $("attack").hidden = !settings.attackOpen;
-  $("attack-from").innerHTML = settings.planets.length
-    ? settings.planets.map(p => `<option value="${esc(p.coords)}">${esc(p.coords)}${p.name ? " " + esc(p.name) : ""}</option>`).join("")
-    : `<option value="">Добавьте свои планеты</option>`;
-  $("attack-from").value = attackOrigin()?.coords ?? "";
-  $("attack-ds").checked = settings.attackDs;
-}
-
-function attackUnitFields() {
-  const field = n => `<label>${esc(n)} <input type="number" min="0" class="num" data-attack-unit="${esc(n)}" inputmode="numeric" placeholder="0"></label>`;
-  $("attack-defense").innerHTML = ATTACK_DEFENSE.map(field).join("");
-  $("attack-fleet").innerHTML = ATTACK_FLEET.map(field).join("");
-}
-
-function renderAttackTechs() {
-  const t = attackTechs;
-  $("attack-techs").textContent = t
-    ? `Технологии цели из отчёта: оружие ${t["Оружейная технология"]}, щиты ${t["Щитовая технология"]}, броня ${t["Броня космических кораблей"]}.`
-    : "Технологии цели считаются равными моим (без премиума).";
-}
-
-/** Заполнить поля из вставленного отчёта; флот и оборону неполного отчёта берём из сохранённого по этой цели. */
-function fillAttack() {
-  const [fresh] = SK.parseReports($("attack-report").value);
-  if (!fresh) { setStatus("attack-fill-status", "Не нашёл отчёт: нужен текст «Шпионский доклад с … [г:с:п] от …».", "err"); return; }
-  const r = SK.mergeReport(targets[fresh.coords], fresh) || targets[fresh.coords];
-  $("attack-to").value = r.coords;
-  SK.RESOURCES.forEach((n, i) => { $("attack-res-" + i).value = r.resources[n] || ""; });
-  const units = { ...r.defense, ...r.fleet };
-  for (const el of document.querySelectorAll("[data-attack-unit]")) el.value = units[el.dataset.attackUnit] || "";
-  const unknown = Object.keys(units).filter(n => !BATTLE.UNITS[n] && !SK.HARMLESS.has(n));
-  attackTechs = Object.keys(r.research || {}).length ? Object.fromEntries(BATTLE.TECHS.map(t => [t, r.research[t] || 0])) : null;
-  renderAttackTechs();
-  $("attack-report").value = "";
-  setStatus("attack-fill-status", r.detailsUnknown ? "Неполный отчёт: флот и оборона цели неизвестны, проверьте поля."
-    : unknown.length ? `Не учитываются: ${unknown.join(", ")}.`
-    : `Заполнено из отчёта ${dateTime(r.time)}${r.time === fresh.time ? "" : " (сохранённого: он новее)"}.`,
-    r.detailsUnknown || unknown.length ? "err" : "ok");
-}
-
-function clearAttack() {
-  for (const el of $("attack").querySelectorAll("input[type=number], #attack-to")) el.value = "";
-  attackTechs = null;
-  renderAttackTechs();
-  setStatus("attack-fill-status", "");
-}
-
-/** Входные данные подбора из полей (attack.js: context); строка — что не так. */
-function attackConfig() {
-  const from = attackOrigin(), to = $("attack-to").value.trim();
-  if (!from) return "Добавьте свою планету в «Моих планетах».";
-  if (!SK.parseCoords(to)) return "Укажите координаты цели, например 8:306:4.";
-  const defense = {};
-  for (const el of document.querySelectorAll("[data-attack-unit]")) {
-    const k = Math.max(0, Math.floor(+el.value || 0));
-    if (k) defense[el.dataset.attackUnit] = k;
-  }
-  return {
-    speed: settings.speed,
-    attacker: { techs: myTechs(), premium: settings.premium },
-    defender: { techs: attackTechs || myTechs() },
-    defense,
-    available: settings.attackDs ? {} : { [BATTLE.DS]: 0 },
-    half: SK.RESOURCES.map((_, i) => Math.floor(Math.max(0, +$("attack-res-" + i).value || 0) * settings.loot / 100)),
-    dists: [SK.distance(SK.parseCoords(from.coords), SK.parseCoords(to))],
-  };
-}
-
-function stopAttack() {
-  attackWorker?.terminate();
-  attackWorker = null;
-  $("attack-run").disabled = false;
-  $("attack-stop").hidden = true;
-}
-
-function runAttack() {
-  const cfg = attackConfig();
-  if (typeof cfg === "string") { setStatus("attack-status", cfg, "err"); return; }
-  if (typeof Worker === "undefined") { setStatus("attack-status", "Браузер не умеет считать в фоне.", "err"); return; }
-  stopAttack();
-  attackTop = null;
-  $("attack-results").innerHTML = "";
-  $("attack-run").disabled = true;
-  $("attack-stop").hidden = false;
-  const started = Date.now(), seconds = () => Math.round((Date.now() - started) / 1000);
-  setStatus("attack-status", "Считаю…");
-  attackWorker = new Worker("attack-worker.js");
-  attackWorker.onmessage = ({ data }) => {
-    if (data.log) { setStatus("attack-status", `Считаю, ${seconds()} с: ${data.log}`); return; }
-    stopAttack();
-    if (data.error) { setStatus("attack-status", "Ошибка расчёта: " + data.error, "err"); return; }
-    attackTop = data.top;
-    setStatus("attack-status", `Готово за ${seconds()} с, дистанция ${fmt(cfg.dists[0])}.`, "ok");
-    renderAttackResults();
-  };
-  attackWorker.onerror = e => { stopAttack(); setStatus("attack-status", "Ошибка расчёта: " + (e.message || e), "err"); };
-  attackWorker.postMessage({ cfg });
-}
-
 /** Сумма в металле со знаком: выгода бывает отрицательной. */
 const money = n => (n < 0 ? "−" : "") + fmtShort(Math.abs(n));
-
-function renderAttackResults() {
-  // Проигрывающие составы не нужны: показываем побеждающие хотя бы в половине боёв.
-  const wins = attackTop.filter(c => c.r.win >= 0.5);
-  const list = obj => Object.entries(obj).map(([n, k]) => `${esc(n)} <span class="num">${k}</span>`).join(", ");
-  const lost = r => Object.fromEntries(Object.entries(r.lost).filter(([, v]) => v >= 0.05)
-    .map(([n, v]) => [n, v.toLocaleString("ru-RU", { maximumFractionDigits: 1 })]));
-  $("attack-results").innerHTML = !wins.length
-    ? `<p class="empty">Ни один состав не побеждает даже флотом в 10 раз дороже обороны цели.</p>`
-    : wins.map((c, i) => `<article class="card">
-        <div class="spread"><span><b>${i + 1}.</b> <span class="profit">${money(c.r.profit)}</span> <span class="muted">выгода</span></span>
-          <span class="pill ${c.r.win >= 0.95 ? "ok" : "warn"}">победа ${Math.round(c.r.win * 100)}%</span></div>
-        <div>${esc(c.share)}</div>
-        <div class="route">${list(Object.fromEntries(Object.entries(c.fleet).map(([n, k]) => [n, fmt(k)])))}</div>
-        <div class="muted" style="font-size:13px">добыча ${fmtShort(c.r.loot)} + обломки ${fmtShort(c.r.debris)}
-          − потери ${fmtShort(c.r.loss)} − топливо ${fmtShort(c.r.fuel)}</div>
-        ${Object.keys(lost(c.r)).length ? `<div class="muted" style="font-size:13px">гибнет в среднем: ${list(lost(c.r))}</div>` : ""}
-      </article>`).join("")
-      + (wins.length < attackTop.length ? `<p class="empty">Остальные составы чаще проигрывают.</p>` : "");
-}
 
 // ---- Самый дешёвый флот (cheapest.js) ----
 
@@ -700,6 +613,62 @@ function runCheapFromText() {
   runCheap(SK.mergeReport(targets[fresh.coords], fresh) || targets[fresh.coords]);
 }
 
+// ---- Активные игроки (по карте галактики) ----
+
+const ACTIVE_PAGE = 10;
+const activeOrigin = () => settings.planets.find(p => p.coords === settings.activeFrom) || settings.planets[0];
+const byCoordsStr = (a, b) => { const x = SK.parseCoords(a), y = SK.parseCoords(b); return x.g - y.g || x.s - y.s || x.p - y.p; };
+
+/** Планеты активных игроков, кроме своих (свой ник — владелец своих планет на карте) и станций альянсов (без игрока). */
+function activePlanets() {
+  const mine = new Set(settings.planets.map(p => galaxy.planets[p.coords]?.player).filter(Boolean));
+  return Object.entries(galaxy.planets).map(([coords, p]) => ({ coords, ...p }))
+    .filter(p => p.player && !isInactive(p.status) && !mine.has(p.player));
+}
+
+function renderActive() {
+  const systems = Object.values(galaxy.systems), planets = Object.keys(galaxy.planets).length;
+  $("galaxy-info").textContent = systems.length
+    ? `Карта: ${fmt(systems.length)} систем, ${fmt(planets)} планет, просмотрена ${dateTime(Math.min(...systems))} – ${dateTime(Math.max(...systems))}.`
+    : "Карты галактики пока нет: бот сканирует системы (node bot/sk.js scan …, затем push), файл загружается в «Резервной копии» → «Добавить из файла».";
+  const origin = activeOrigin(), byDist = settings.activeSort === "distance" && !!origin;
+  $("active-sort").value = settings.activeSort;
+  $("active-from").hidden = !byDist;
+  $("active-from").innerHTML = settings.planets.map(p =>
+    `<option value="${esc(p.coords)}">от ${esc(p.coords)}${p.name ? " " + esc(p.name) : ""}</option>`).join("");
+  if (origin) $("active-from").value = origin.coords;
+  $("active-strong").checked = settings.activeStrong;
+  $("active-noob").checked = settings.activeNoob;
+  if (document.activeElement !== $("active-player")) $("active-player").value = settings.activePlayer;
+
+  const all = activePlanets();
+  $("active-players").innerHTML = [...new Set(all.map(p => p.player))].sort().map(n => `<option value="${esc(n)}">`).join("");
+  const name = settings.activePlayer.trim().toLowerCase();
+  const at = origin && SK.parseCoords(origin.coords);
+  const list = all
+    .filter(p => !name || p.player.toLowerCase().includes(name))
+    .filter(p => (settings.activeStrong || !(p.status || "").includes("S")) && (settings.activeNoob || !(p.status || "").includes("N")))
+    .map(p => ({ ...p, dist: at && SK.distance(at, SK.parseCoords(p.coords)) }))
+    .sort(byDist ? (a, b) => a.dist - b.dist || byCoordsStr(a.coords, b.coords) : (a, b) => byCoordsStr(a.coords, b.coords));
+  const pages = Math.max(1, Math.ceil(list.length / ACTIVE_PAGE));
+  activePage = Math.min(Math.max(1, activePage), pages);
+  const from = (activePage - 1) * ACTIVE_PAGE, shown = list.slice(from, from + ACTIVE_PAGE);
+  const players = new Set(list.map(p => p.player)).size;
+  $("active-count").textContent = list.length
+    ? `${fmt(from + 1)}–${fmt(from + shown.length)} из ${fmt(list.length)} планет, игроков ${fmt(players)}` : "";
+  $("active-pager").hidden = pages < 2;
+  $("active-page").textContent = `${activePage} из ${pages}`;
+  $("active-prev").disabled = activePage <= 1;
+  $("active-next").disabled = activePage >= pages;
+  $("active").innerHTML = shown.length ? shown.map(p => `<div class="item">
+      <span class="grow"><b class="num">${esc(p.coords)}</b> ${esc(p.planet || "")}
+        ${p.moon ? '<span class="pill">луна</span>' : ""} ${p.debris ? '<span class="pill">обломки</span>' : ""}<br>
+        <span class="muted">${esc(p.player)}${p.status ? ` (${esc(p.status)})` : ""}${p.alliance ? " · " + esc(p.alliance) : ""}</span></span>
+      <span class="muted num" style="font-size:13px;text-align:right">${byDist ? `${fmt(p.dist)}<br>` : ""}${dateTime(p.at)}</span>
+    </div>`).join("")
+    : `<p class="empty">${all.length ? "Нет планет для выбранных фильтров." : "Нет данных об активных игроках."}</p>`;
+}
+
 function renderSettings() {
   for (const d of Object.keys(SK.DRIVES)) $("eng-" + d).value = settings.engines[d] ?? 0;
   $("ship").innerHTML = settings.ships.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
@@ -753,8 +722,8 @@ function render() {
   renderPlanets();
   renderMines();
   renderSettings();
-  renderAttack();
   renderCheap();
+  renderActive();
 }
 
 // Таймер обновляет только цели: поля ввода ниже не перерисовываются, пока их редактируют.
@@ -868,13 +837,6 @@ for (const k of ["alliance", "stations"]) {
 }
 $("colonization").addEventListener("change", e => { settings.colonization = Math.max(0, Math.floor(+e.target.value || 0)); save(); });
 $("mines-toggle").addEventListener("click",() => { settings.minesOpen = !settings.minesOpen; save({ changed: false }); });
-$("attack-toggle").addEventListener("click", () => { settings.attackOpen = !settings.attackOpen; save({ changed: false }); });
-$("attack-from").addEventListener("change", e => { settings.attackFrom = e.target.value; save({ changed: false }); });
-$("attack-ds").addEventListener("change", e => { settings.attackDs = e.target.checked; save({ changed: false }); });
-$("attack-fill").addEventListener("click", fillAttack);
-$("attack-clear").addEventListener("click", clearAttack);
-$("attack-run").addEventListener("click", runAttack);
-$("attack-stop").addEventListener("click", () => { stopAttack(); setStatus("attack-status", "Остановлено."); });
 $("cheap-from").addEventListener("change", e => { settings.cheapFrom = e.target.value; save({ changed: false }); });
 $("cheap-run").addEventListener("click", runCheapFromText);
 $("cheap-stop").addEventListener("click", () => { stopCheap(); setStatus("cheap-status", "Остановлено."); });
@@ -883,6 +845,18 @@ const goToPage = n => { page = n; tick(); $("h-targets").scrollIntoView({ block:
 $("page").addEventListener("change", e => goToPage(+e.target.value));
 $("page-prev").addEventListener("click", () => goToPage(page - 1));
 $("page-next").addEventListener("click", () => goToPage(page + 1));
+
+const activeView = patch => { Object.assign(settings, patch); activePage = 1; save({ changed: false }); };
+$("active-sort").addEventListener("change", e => activeView({ activeSort: e.target.value }));
+$("active-from").addEventListener("change", e => activeView({ activeFrom: e.target.value }));
+$("active-strong").addEventListener("change", e => activeView({ activeStrong: e.target.checked }));
+$("active-noob").addEventListener("change", e => activeView({ activeNoob: e.target.checked }));
+// Ник фильтрует на лету, без перерисовки остальной страницы; сохраняется при выходе из поля.
+$("active-player").addEventListener("input", e => { settings.activePlayer = e.target.value; activePage = 1; renderActive(); });
+$("active-player").addEventListener("change", () => save({ changed: false }));
+const goToActivePage = n => { activePage = n; renderActive(); $("h-active").scrollIntoView({ block: "start" }); };
+$("active-prev").addEventListener("click", () => goToActivePage(activePage - 1));
+$("active-next").addEventListener("click", () => goToActivePage(activePage + 1));
 
 $("ship-add").addEventListener("click", () => {
   settings.ships.push({ id: "s" + Date.now(), name: "Новый корабль", drive: "combustion", base: 1, capacity: 0, consumption: 0 });
@@ -925,7 +899,7 @@ $("targets").addEventListener("toggle", e => {
 function backupFile() {
   const d = new Date();
   const name = `space-kings-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
-  const data = JSON.stringify({ format: "space-kings-recon", version: 2, exportedAt: d.getTime(), settings, targets: Object.values(targets) });
+  const data = JSON.stringify({ format: "space-kings-recon", version: 2, exportedAt: d.getTime(), settings, targets: Object.values(targets), galaxy });
   return new File([data], name, { type: "application/json" });
 }
 
@@ -956,10 +930,14 @@ async function shareBackup() {
   }
 }
 
-/** Резервная копия этой версии или старой (JSON из поля «Показать JSON»). */
+/**
+ * Резервная копия этой версии или старой (JSON из поля «Показать JSON»). Файл карты от бота (bot/sk.js push) —
+ * тот же формат без настроек и отчётов, только с galaxy.
+ */
 function readBackup(text) {
   const data = JSON.parse(text);
-  if (data?.format === "space-kings-recon" && Array.isArray(data.targets)) return { settings: data.settings, targets: data.targets };
+  if (data?.format === "space-kings-recon" && Array.isArray(data.targets))
+    return { settings: data.settings, targets: data.targets, galaxy: data.galaxy };
   if (data && typeof data.targets === "object" && Array.isArray(data.planets)) {
     const { targets: t, ...rest } = data;
     return { settings: rest, targets: Object.values(t) };
@@ -981,7 +959,11 @@ $("backup-file").addEventListener("change", async e => {
   try {
     pendingImport = readBackup(await file.text());
     $("import-actions").hidden = false;
-    setStatus("data-status", `В файле ${fmt(pendingImport.targets.length)} целей и ${pendingImport.settings?.planets?.length ?? 0} своих планет.`);
+    // Без настроек (файл карты) заменять нечем: «Заменить» стёрло бы свои планеты.
+    $("import-replace").hidden = !pendingImport.settings;
+    const systems = Object.keys(pendingImport.galaxy?.systems || {}).length;
+    setStatus("data-status", `В файле ${fmt(pendingImport.targets.length)} целей, ${pendingImport.settings?.planets?.length ?? 0} своих планет`
+      + `${systems ? `, карта ${fmt(systems)} систем` : ""}.`);
   } catch {
     pendingImport = null;
     setStatus("data-status", "Это не резервная копия «Разведки». Выберите файл, скачанный кнопкой «Скачать файл».", "err");
@@ -990,20 +972,25 @@ $("backup-file").addEventListener("change", async e => {
 
 $("import-merge").addEventListener("click", () => {
   const { put } = mergeReports(pendingImport.targets);
+  const systems = mergeGalaxy(pendingImport.galaxy);
   $("import-actions").hidden = true;
-  setStatus("data-status", `Добавлено и обновлено отчётов: ${fmt(put.length)}. Свои планеты и настройки не менялись.`, "ok");
+  setStatus("data-status", `Добавлено и обновлено отчётов: ${fmt(put.length)}, систем карты: ${fmt(systems)}. `
+    + "Свои планеты и настройки не менялись.", "ok");
   pendingImport = null;
-  save({ put });
+  save({ put, map: systems > 0 });
 });
 
 $("import-replace").addEventListener("click", () => {
   settings = normalizeSettings(pendingImport.settings);
   targets = Object.fromEntries(pendingImport.targets.map(r => [r.coords, r]));
+  // В старых копиях карты нет — тогда остаётся своя.
+  const map = !!pendingImport.galaxy;
+  if (map) galaxy = pendingImport.galaxy;
   $("import-actions").hidden = true;
-  setStatus("data-status", "Все данные заменены данными из файла.", "ok");
+  setStatus("data-status", `Все данные заменены данными из файла${map ? "" : " (карты в нём нет — карта галактики осталась прежней)"}.`, "ok");
   pendingImport = null;
-  page = 1;
-  save({ clear: true, put: Object.values(targets) });
+  page = activePage = 1;
+  save({ clear: true, put: Object.values(targets), map });
 });
 
 // ---- Запуск ----
@@ -1012,8 +999,6 @@ $("speed").innerHTML = Array.from({ length: 10 }, (_, i) => `<option value="${10
 $("filter").innerHTML = Object.entries(FILTERS).map(([k, n]) => `<option value="${k}">${n}</option>`).join("");
 $("sort").innerHTML = Object.entries(SORTS).map(([k, o]) => `<option value="${k}">${o.name}</option>`).join("");
 $("page-size").innerHTML = PAGE_SIZES.map(n => `<option value="${n}">по ${n}</option>`).join("");
-attackUnitFields();
-renderAttackTechs();
 render();
 init()
   .then(render)
