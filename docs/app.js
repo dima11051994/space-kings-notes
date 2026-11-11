@@ -74,6 +74,8 @@ let settings = normalizeSettings(null);
 let targets = {};   // координаты -> последний шпионский отчёт
 // Карта галактики от бота (bot/sk.js scan): systems {"г:с": время просмотра}, planets {"г:с:п": {planet, moon, debris, player, status, alliance, at}}.
 let galaxy = { systems: {}, planets: {} };
+// Рейтинг из «Статистики» (бот: node bot/stats.js, затем push): ник → [место, очки]; at — время сбора.
+let rating = { at: 0, players: {} };
 let page = 1;
 let activePage = 1;
 let db = null;
@@ -108,9 +110,9 @@ function openDb() {
 
 /**
  * Одна транзакция: настройки, добавленные и удалённые отчёты; `clear` — сначала стереть все отчёты;
- * `map` — записать карту галактики (она хранится отдельно от отчётов, одной записью).
+ * `map` — записать карту галактики, `rank` — рейтинг (хранятся отдельно от отчётов, каждый одной записью).
  */
-function write({ put = [], remove = [], clear = false, map = false } = {}) {
+function write({ put = [], remove = [], clear = false, map = false, rank = false } = {}) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(["targets", "meta"], "readwrite");
     const store = tx.objectStore("targets");
@@ -119,6 +121,7 @@ function write({ put = [], remove = [], clear = false, map = false } = {}) {
     for (const c of remove) store.delete(c);
     tx.objectStore("meta").put(settings, "settings");
     if (map) tx.objectStore("meta").put(galaxy, "galaxy");
+    if (rank) tx.objectStore("meta").put(rating, "rating");
     tx.oncomplete = resolve;
     tx.onerror = tx.onabort = () => reject(tx.error);
   });
@@ -142,6 +145,7 @@ async function init() {
     settings = normalizeSettings(saved);
     for (const r of await done(db.transaction("targets").objectStore("targets").getAll())) targets[r.coords] = r;
     galaxy = await done(db.transaction("meta").objectStore("meta").get("galaxy")) || galaxy;
+    rating = await done(db.transaction("meta").objectStore("meta").get("rating")) || rating;
     return;
   }
   // Первый запуск этой версии: перенести данные из localStorage, если они есть.
@@ -662,11 +666,18 @@ function activePlanets() {
     .filter(p => (p.player || p.manual) && !p.deleted && !isInactive(p.status) && !mine.has(p.player));
 }
 
+/** « · №12, 345 млн очков» по рейтингу, если игрок в нём есть. */
+function rankText(player) {
+  const r = rating.players[player];
+  return r ? ` · <b class="num">№${fmt(r[0])}</b>, ${(r[1] / 1e6).toLocaleString("ru", { maximumFractionDigits: 1 })} млн очков` : "";
+}
+
 function renderActive() {
   const systems = Object.values(galaxy.systems), planets = Object.keys(galaxy.planets).length;
   $("galaxy-info").textContent = systems.length
     ? `Карта: ${fmt(systems.length)} систем, ${fmt(planets)} планет, просмотрена ${dateTime(Math.min(...systems))} – ${dateTime(Math.max(...systems))}.`
     : "Карты галактики пока нет: бот сканирует системы (node bot/sk.js scan …, затем push), файл загружается в «Резервной копии» → «Добавить из файла».";
+  if (rating.at) $("galaxy-info").textContent += ` Рейтинг: ${fmt(Object.keys(rating.players).length)} игроков на ${dateTime(rating.at)}.`;
   const origin = activeOrigin(), byDist = settings.activeSort === "distance" && !!origin;
   $("active-sort").value = settings.activeSort;
   $("active-from").hidden = !byDist;
@@ -701,7 +712,7 @@ function renderActive() {
   $("active").innerHTML = shown.length ? shown.map(p => `<div class="item" style="flex-wrap:wrap">
       <span class="grow"><b class="num">${esc(p.coords)}</b> ${esc(p.planet || "")}
         ${p.moon ? '<span class="pill">луна</span>' : ""} ${p.debris ? '<span class="pill">обломки</span>' : ""}<br>
-        <span class="muted">${esc(p.player || "—")}${p.status ? ` (${esc(p.status)})` : ""}${p.alliance ? " · " + esc(p.alliance) : ""}</span></span>
+        <span class="muted">${esc(p.player || "—")}${p.status ? ` (${esc(p.status)})` : ""}${p.alliance ? " · " + esc(p.alliance) : ""}${rankText(p.player)}</span></span>
       <span class="muted num" style="font-size:13px;text-align:right">${byDist ? `${fmt(p.dist)}<br>` : ""}${dateTime(p.manual || p.at)}${p.manual ? "<br>вручную" : ""}</span>
       <div style="flex-basis:100%">${statusEditor(p.coords)}</div>
     </div>`).join("")
@@ -944,7 +955,7 @@ for (const list of ["targets", "active"]) $(list).addEventListener("toggle", e =
 function backupFile() {
   const d = new Date();
   const name = `space-kings-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
-  const data = JSON.stringify({ format: "space-kings-recon", version: 2, exportedAt: d.getTime(), settings, targets: Object.values(targets), galaxy });
+  const data = JSON.stringify({ format: "space-kings-recon", version: 2, exportedAt: d.getTime(), settings, targets: Object.values(targets), galaxy, rating });
   return new File([data], name, { type: "application/json" });
 }
 
@@ -977,12 +988,12 @@ async function shareBackup() {
 
 /**
  * Резервная копия этой версии или старой (JSON из поля «Показать JSON»). Файл карты от бота (bot/sk.js push) —
- * тот же формат без настроек и отчётов, только с galaxy.
+ * тот же формат без настроек и отчётов, только с galaxy и rating.
  */
 function readBackup(text) {
   const data = JSON.parse(text);
   if (data?.format === "space-kings-recon" && Array.isArray(data.targets))
-    return { settings: data.settings, targets: data.targets, galaxy: data.galaxy };
+    return { settings: data.settings, targets: data.targets, galaxy: data.galaxy, rating: data.rating };
   if (data && typeof data.targets === "object" && Array.isArray(data.planets)) {
     const { targets: t, ...rest } = data;
     return { settings: rest, targets: Object.values(t) };
@@ -1007,8 +1018,9 @@ $("backup-file").addEventListener("change", async e => {
     // Без настроек (файл карты) заменять нечем: «Заменить» стёрло бы свои планеты.
     $("import-replace").hidden = !pendingImport.settings;
     const systems = Object.keys(pendingImport.galaxy?.systems || {}).length;
+    const ranked = Object.keys(pendingImport.rating?.players || {}).length;
     setStatus("data-status", `В файле ${fmt(pendingImport.targets.length)} целей, ${pendingImport.settings?.planets?.length ?? 0} своих планет`
-      + `${systems ? `, карта ${fmt(systems)} систем` : ""}.`);
+      + `${systems ? `, карта ${fmt(systems)} систем` : ""}${ranked ? `, рейтинг ${fmt(ranked)} игроков` : ""}.`);
   } catch {
     pendingImport = null;
     setStatus("data-status", "Это не резервная копия «Разведки». Выберите файл, скачанный кнопкой «Скачать файл».", "err");
@@ -1018,11 +1030,13 @@ $("backup-file").addEventListener("change", async e => {
 $("import-merge").addEventListener("click", () => {
   const { put } = mergeReports(pendingImport.targets);
   const systems = mergeGalaxy(pendingImport.galaxy);
+  const rank = (pendingImport.rating?.at || 0) > rating.at;  // рейтинг — снимок целиком: берём более свежий
+  if (rank) rating = pendingImport.rating;
   $("import-actions").hidden = true;
-  setStatus("data-status", `Добавлено и обновлено отчётов: ${fmt(put.length)}, систем и правок карты: ${fmt(systems)}. `
-    + "Свои планеты и настройки не менялись.", "ok");
+  setStatus("data-status", `Добавлено и обновлено отчётов: ${fmt(put.length)}, систем и правок карты: ${fmt(systems)}`
+    + `${rank ? ", рейтинг обновлён" : ""}. Свои планеты и настройки не менялись.`, "ok");
   pendingImport = null;
-  save({ put, map: systems > 0 });
+  save({ put, map: systems > 0, rank });
 });
 
 $("import-replace").addEventListener("click", () => {
@@ -1031,11 +1045,13 @@ $("import-replace").addEventListener("click", () => {
   // В старых копиях карты нет — тогда остаётся своя.
   const map = !!pendingImport.galaxy;
   if (map) galaxy = pendingImport.galaxy;
+  const rank = !!pendingImport.rating;
+  if (rank) rating = pendingImport.rating;
   $("import-actions").hidden = true;
   setStatus("data-status", `Все данные заменены данными из файла${map ? "" : " (карты в нём нет — карта галактики осталась прежней)"}.`, "ok");
   pendingImport = null;
   page = activePage = 1;
-  save({ clear: true, put: Object.values(targets), map });
+  save({ clear: true, put: Object.values(targets), map, rank });
 });
 
 // ---- Запуск ----

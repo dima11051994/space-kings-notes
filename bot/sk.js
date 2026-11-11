@@ -284,13 +284,23 @@ function storeSystem(g, s, rows) {
  * Положить карту галактики в «Загрузки» телефона файлом заметок без настроек и отчётов:
  * в заметках «Резервная копия» → «Загрузить файл» → «Добавить из файла».
  */
+/** Рейтинг из bot/stats-raw.json (node bot/stats.js) в виде страницы заметок: {at, players: {ник: [место, очки]}}. */
+function loadRating() {
+  try {
+    const { at, players } = JSON.parse(fs.readFileSync(path.join(__dirname, "stats-raw.json"), "utf8"));
+    return { at, players: Object.fromEntries(players.map(p => [p.name, [p.rank, p.points]])) };
+  } catch { return null; }
+}
 function pushGalaxy() {
   const map = loadGalaxy(), d = new Date(), pad = n => String(n).padStart(2, "0");
   const name = `space-kings-galaxy-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
   const local = path.join(__dirname, name);
-  fs.writeFileSync(local, JSON.stringify({ format: "space-kings-recon", version: 2, exportedAt: d.getTime(), targets: [], galaxy: map }));
+  const rating = loadRating();
+  fs.writeFileSync(local, JSON.stringify({ format: "space-kings-recon", version: 2, exportedAt: d.getTime(), targets: [], galaxy: map,
+                                           ...(rating && { rating }) }));
   try { adb("push", local, "/sdcard/Download/" + name); } finally { fs.unlinkSync(local); }
-  return { file: "Загрузки/" + name, systems: Object.keys(map.systems).length, planets: Object.keys(map.planets).length };
+  return { file: "Загрузки/" + name, systems: Object.keys(map.systems).length, planets: Object.keys(map.planets).length,
+           rating: rating ? Object.keys(rating.players).length : "нет (node bot/stats.js)" };
 }
 
 /**
