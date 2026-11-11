@@ -9,3 +9,10 @@
 # game-data/dominance.js: список оборон (пересоздаётся) и результаты по составам (сотни МБ)
 /game-data/dominance/defenses.json
 /game-data/dominance/fleets/
+
+# Данные бота: карта галактики, рейтинг, сообщения экспедиций, статусы, логи, блокировка
+/bot/*.json
+/bot/*.bak
+/bot/*.log
+/bot/*.txt
+/bot/.lock
