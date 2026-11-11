@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
   activeFrom: "",        // своя планета, от которой считать расстояние
   activeStrong: false,   // показывать сильных (S)
   activeNoob: false,     // показывать слабых (N)
+  activeVacation: false, // показывать в режиме отпуска (v)
   activePlayer: "",      // часть ника
   showHidden: false,     // в целях — только скрытые по карте (активные, удалённые, исчезнувшие)
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
@@ -674,6 +675,7 @@ function renderActive() {
   if (origin) $("active-from").value = origin.coords;
   $("active-strong").checked = settings.activeStrong;
   $("active-noob").checked = settings.activeNoob;
+  $("active-vacation").checked = settings.activeVacation;
   if (document.activeElement !== $("active-player")) $("active-player").value = settings.activePlayer;
 
   const all = activePlanets();
@@ -682,7 +684,8 @@ function renderActive() {
   const at = origin && SK.parseCoords(origin.coords);
   const list = all
     .filter(p => !name || p.player.toLowerCase().includes(name))
-    .filter(p => (settings.activeStrong || !(p.status || "").includes("S")) && (settings.activeNoob || !(p.status || "").includes("N")))
+    .filter(p => (settings.activeStrong || !(p.status || "").includes("S")) && (settings.activeNoob || !(p.status || "").includes("N"))
+      && (settings.activeVacation || !(p.status || "").includes("v")))
     .map(p => ({ ...p, dist: at && SK.distance(at, SK.parseCoords(p.coords)) }))
     .sort(byDist ? (a, b) => a.dist - b.dist || byCoordsStr(a.coords, b.coords) : (a, b) => byCoordsStr(a.coords, b.coords));
   const pages = Math.max(1, Math.ceil(list.length / ACTIVE_PAGE));
@@ -891,6 +894,7 @@ $("active-sort").addEventListener("change", e => activeView({ activeSort: e.targ
 $("active-from").addEventListener("change", e => activeView({ activeFrom: e.target.value }));
 $("active-strong").addEventListener("change", e => activeView({ activeStrong: e.target.checked }));
 $("active-noob").addEventListener("change", e => activeView({ activeNoob: e.target.checked }));
+$("active-vacation").addEventListener("change", e => activeView({ activeVacation: e.target.checked }));
 // Ник фильтрует на лету, без перерисовки остальной страницы; сохраняется при выходе из поля.
 $("active-player").addEventListener("input", e => { settings.activePlayer = e.target.value; activePage = 1; renderActive(); });
 $("active-player").addEventListener("change", () => save({ changed: false }));
