@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS = {
   activeNoob: false,     // показывать слабых (N)
   activeVacation: false, // показывать в режиме отпуска (v)
   activePlayer: "",      // часть ника
+  activeMinRank: 0,      // «рейтинг не выше»: только места >= этого (0 — без фильтра)
   showHidden: false,     // в целях — только скрытые по карте (активные, удалённые, исчезнувшие)
   backup: { at: 0, changedAt: 0, snoozeUntil: 0 },  // напоминание о резервной копии
 };
@@ -688,6 +689,7 @@ function renderActive() {
   $("active-noob").checked = settings.activeNoob;
   $("active-vacation").checked = settings.activeVacation;
   if (document.activeElement !== $("active-player")) $("active-player").value = settings.activePlayer;
+  if (document.activeElement !== $("active-rank")) $("active-rank").value = settings.activeMinRank || "";
 
   const all = activePlanets();
   $("active-players").innerHTML = [...new Set(all.map(p => p.player))].sort().map(n => `<option value="${esc(n)}">`).join("");
@@ -695,6 +697,8 @@ function renderActive() {
   const at = origin && SK.parseCoords(origin.coords);
   const list = all
     .filter(p => !name || p.player.toLowerCase().includes(name))
+    // Без места в рейтинге (служебные аккаунты, игроки новее рейтинга) при фильтре не показываем.
+    .filter(p => !settings.activeMinRank || rating.players[p.player]?.[0] >= settings.activeMinRank)
     .filter(p => (settings.activeStrong || !(p.status || "").includes("S")) && (settings.activeNoob || !(p.status || "").includes("N"))
       && (settings.activeVacation || !(p.status || "").includes("v")))
     .map(p => ({ ...p, dist: at && SK.distance(at, SK.parseCoords(p.coords)) }))
@@ -909,6 +913,8 @@ $("active-vacation").addEventListener("change", e => activeView({ activeVacation
 // Ник фильтрует на лету, без перерисовки остальной страницы; сохраняется при выходе из поля.
 $("active-player").addEventListener("input", e => { settings.activePlayer = e.target.value; activePage = 1; renderActive(); });
 $("active-player").addEventListener("change", () => save({ changed: false }));
+$("active-rank").addEventListener("input", e => { settings.activeMinRank = Math.max(0, Math.floor(+e.target.value) || 0); activePage = 1; renderActive(); });
+$("active-rank").addEventListener("change", () => save({ changed: false }));
 const goToActivePage = n => { activePage = n; renderActive(); $("h-active").scrollIntoView({ block: "start" }); };
 $("active-prev").addEventListener("click", () => goToActivePage(activePage - 1));
 $("active-next").addEventListener("click", () => goToActivePage(activePage + 1));
