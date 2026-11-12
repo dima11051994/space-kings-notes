@@ -29,19 +29,23 @@ const SK = (() => {
     return headers.map((m, i) => {
       const body = text.slice(m.index + m[0].length, i + 1 < headers.length ? headers[i + 1].index : text.length);
       const [, planet, coords, dd, mm, yyyy, h, mi, s] = m;
+      // Только строки самого отчёта: за кнопками под ним — уже другие сообщения пакета.
+      const lines = [];
+      for (const raw of body.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (REPORT_END.test(line)) break;
+        if (line) lines.push(line);
+      }
       const report = {
         planet, coords,
         time: new Date(+yyyy, +mm - 1, +dd, +h, +mi, +s).getTime(),
         resources: {},
-        incomplete: INCOMPLETE.test(body),
+        incomplete: lines.some(l => INCOMPLETE.test(l)),
       };
-      // Полный отчёт: раздел без строк — значит, там пусто. Неполный: разделов нет.
+      // Полный отчёт: раздел без строк — значит, там пусто. Неполный: видны только разделы с заголовком.
       if (!report.incomplete) for (const k of DETAILS) report[k] = {};
       let section = "resources";
-      for (const raw of body.split(/\r?\n/)) {
-        const line = raw.trim();
-        if (!line) continue;
-        if (REPORT_END.test(line)) break;
+      for (const line of lines) {
         if (SECTIONS[line]) { section = SECTIONS[line]; report[section] ??= {}; continue; }
         for (const [, name, value] of line.matchAll(PAIR)) {
           report[section][name.trim()] = Number(value.replace(/\./g, ""));
@@ -53,8 +57,8 @@ const SK = (() => {
 
   /**
    * Новый отчёт поверх сохранённого; null, если сохранённый не старше.
-   * Полный отчёт заменяет всё, кроме исследований, если их в нём не видно. Неполный обновляет время и ресурсы, а флот, оборону, постройки
-   * и исследования берёт из сохранённого; если сохранённого нет, они неизвестны (`detailsUnknown`).
+   * Полный отчёт заменяет всё, кроме исследований, если их в нём не видно. Неполный обновляет время, ресурсы и видимые в нём разделы,
+   * а остальные (флот, оборону, постройки, исследования) берёт из сохранённого; если сохранённого нет, они неизвестны (`detailsUnknown`).
    */
   function mergeReport(old, fresh) {
     if (old && old.time >= fresh.time) return null;
@@ -64,8 +68,10 @@ const SK = (() => {
       if (!Object.keys(merged.research).length && old?.research) merged.research = old.research;
       return { ...merged, detailsUnknown: false };
     }
-    for (const k of DETAILS) merged[k] = old?.[k] ?? {};
-    merged.detailsUnknown = old ? !!old.detailsUnknown : true;
+    const missing = DETAILS.filter(k => !merged[k]);
+    for (const k of missing) merged[k] = old?.[k] ?? {};
+    // Оборона и флот — то, что решает атаку: известны, если видны в отчёте или были известны раньше.
+    merged.detailsUnknown = (missing.includes("defense") || missing.includes("fleet")) && (old ? !!old.detailsUnknown : true);
     return merged;
   }
 
