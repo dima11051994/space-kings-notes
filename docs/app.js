@@ -201,7 +201,7 @@ function mergeGalaxy(from) {
   return r.count;
 }
 
-/** Ручная правка позиции: mark — moon | deleted | active | S | N, on — включено. */
+/** Ручная правка позиции: mark — moon | deleted | active | S | N | v, on — включено. */
 function markPlanet(coords, mark, on) {
   const old = galaxy.planets[coords]
     || { planet: targets[coords]?.planet || "", player: "", status: "i", moon: false, debris: false, alliance: "" };
@@ -210,12 +210,12 @@ function markPlanet(coords, mark, on) {
   else if (mark === "deleted") { if (on) p.deleted = true; else delete p.deleted; }
   else {
     // Статус собирается заново: i/I (неактивный; буква запоминается в idle, чтобы вернуть её после «активного»),
-    // S, N; отпуск (v) сохраняется.
+    // S, N, v (отпуск).
     const st = old.status || "", flag = f => mark === f ? on : st.includes(f);
     const active = mark === "active" ? on : !isInactive(st);
     const idle = st.match(/[iI]/)?.[0] || old.idle || "i";
     if (active && isInactive(st)) p.idle = idle;
-    p.status = (active ? "" : idle) + (flag("S") ? "S" : "") + (flag("N") ? "N" : "") + (st.includes("v") ? "v" : "");
+    p.status = (active ? "" : idle) + (flag("S") ? "S" : "") + (flag("N") ? "N" : "") + (flag("v") ? "v" : "");
   }
   galaxy.planets[coords] = p;
   save({ map: true });
@@ -228,7 +228,7 @@ function statusEditor(coords) {
   const box = (mark, label, on) => `<label class="check"><input type="checkbox" data-mark="${mark}" data-mark-coords="${esc(coords)}"${on ? " checked" : ""}> ${label}</label>`;
   return `<details data-edit="${esc(coords)}"${openEdits.has(coords) ? " open" : ""}><summary>Изменить статус</summary><div class="row">
     ${box("moon", "Луна", p?.moon)}${box("deleted", "Удалена", p?.deleted)}${box("active", "Активный", p && !isInactive(st))}
-    ${box("S", "Сильный (S)", st.includes("S"))}${box("N", "Слабый (N)", st.includes("N"))}</div></details>`;
+    ${box("S", "Сильный (S)", st.includes("S"))}${box("N", "Слабый (N)", st.includes("N"))}${box("v", "В отпуске (v)", st.includes("v"))}</div></details>`;
 }
 
 // ---- Цели ----
