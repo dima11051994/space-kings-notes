@@ -1,10 +1,12 @@
 // Место для новой колонии: свободная позиция (по умолчанию 15) в просмотренной системе, в пределах ±RANGE систем
 // нет активных сильных игроков (S без i/I), а рядом побольше ресурсов на неактивных планетах.
 // Ресурсы — по последним отчётам (SK.resourcesAt досчитывает выработку до сейчас); неактивные без отчёта считаются отдельно.
+// Дополнительно — расстояние до ближайших планет игроков из NEAR.
 // Запуск: node bot/colony-spot.js [позиция=15] [диапазон=10] [сколько показать=15]
 const SK = require("../docs/core.js");
 const { loadData, loadGalaxy } = require("./sk.js");
 
+const NEAR = ["YaYeduNaSumatru", "Galactus"];
 const [POS = 15, RANGE = 10, TOP = 15] = process.argv.slice(2).map(Number);
 const { systems, planets } = loadGalaxy();
 const data = loadData();
@@ -12,6 +14,15 @@ const now = Date.now();
 const fmt = n => (n / 1e6).toFixed(1) + " млн";
 const reports = new Map(data.targets.map(t => [t.coords, t]));
 const own = data.settings.planets.map(p => p.coords.split(":").map(Number));
+
+// Планеты «интересных» игроков: ник (в нижнем регистре) → [[g, s], ...]
+const near = {};
+for (const [coords, p] of Object.entries(planets)) {
+  if (!p.player || !NEAR.some(n => n.toLowerCase() === p.player.toLowerCase())) continue;
+  const [g, s] = coords.split(":").map(Number);
+  (near[p.player] ??= []).push([g, s]);
+}
+for (const n of NEAR) console.log(`${n}: планет на карте — ${near[n]?.length ?? 0}`);
 
 // Сводка по каждой системе: активные сильные, неактивные планеты и ресурсы на них.
 const bySystem = {};
@@ -43,15 +54,22 @@ for (const key of Object.keys(systems)) {
     strong.push(...sys.strong); active += sys.active; inactive += sys.inactive; unknown += sys.unknown; res += sys.res;
   }
   if (strong.length) continue;
-  const near = own.filter(([og]) => og === g).map(([, os]) => Math.abs(os - s));
-  spots.push({ coords: `${key}:${POS}`, g, s, res, active, inactive, unknown, scanned, ownDist: near.length ? Math.min(...near) : null });
+  const dist = list => { const d = list.filter(([lg]) => lg === g).map(([, ls]) => Math.abs(ls - s)); return d.length ? Math.min(...d) : null; };
+  const nearOwn = own.filter(([og]) => og === g).map(([, os]) => Math.abs(os - s));
+  spots.push({ coords: `${key}:${POS}`, g, s, res, active, inactive, unknown, scanned,
+    ownDist: nearOwn.length ? Math.min(...nearOwn) : null,
+    near: Object.fromEntries(Object.entries(near).map(([n, list]) => [n, dist(list)])) });
 }
 
 spots.sort((a, b) => b.res - a.res);
 // Соседние позиции видят почти тех же неактивных: из каждого скопления (ближе RANGE систем) — лучшая.
 const best = spots.filter((x, i) => !spots.slice(0, i).some(y => y.g === x.g && Math.abs(y.s - x.s) <= RANGE));
+const distCell = v => v === null ? "—".padStart(9) : (String(v) + " сист.").padStart(9);
 console.log(`Свободных позиций ${POS} без активных S в ±${RANGE} систем: ${spots.length}\n`);
-console.log("Лучшая в каждом скоплении:\nКоординаты   Ресурсы у неактивных  Неактивных (без отчёта)  Активных  До своей планеты");
+console.log("Лучшая в каждом скоплении:");
+console.log("Координаты   Ресурсы у неактивных  Неактивных (без отчёта)  Активных  До своей планеты"
+  + NEAR.map(n => "  До " + n).join(""));
 for (const x of best.slice(0, TOP))
   console.log(`${x.coords.padEnd(12)} ${fmt(x.res).padStart(20)}  ${String(x.inactive).padStart(10)} (${x.unknown})`
-    + `${"".padStart(13)}${String(x.active).padStart(8)}  ${x.ownDist === null ? "нет в галактике" : x.ownDist + " сист."}`);
+    + `${"".padStart(13)}${String(x.active).padStart(8)}  ${(x.ownDist === null ? "нет в галактике" : x.ownDist + " сист.").padEnd(17)}`
+    + NEAR.map(n => distCell(x.near[n] ?? null)).join("  "));

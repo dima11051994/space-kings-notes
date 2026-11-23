@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
   activeStrong: false,   // показывать сильных (S)
   activeNoob: false,     // показывать слабых (N)
   activeVacation: false, // показывать в режиме отпуска (v)
+  activeInactive: false, // показывать неактивных (i/I)
   activePlayer: "",      // часть ника
   activeMinRank: 0,      // «рейтинг не выше»: только места >= этого (0 — без фильтра)
   showHidden: false,     // в целях — только скрытые по карте (активные, удалённые, исчезнувшие)
@@ -201,8 +202,18 @@ function mergeGalaxy(from) {
   return r.count;
 }
 
-/** Ручная правка позиции: mark — moon | deleted | active | S | N | v, on — включено. */
+/** Ручная правка позиции: mark — moon | deleted | active | S | N | v, on — включено.
+ *  Статусные правки (active, S, N, v) применяются ко всем планетам игрока на карте — статус у игрока, не у планеты. */
 function markPlanet(coords, mark, on) {
+  const player = galaxy.planets[coords]?.player;
+  const all = player && !["moon", "deleted"].includes(mark)
+    ? Object.keys(galaxy.planets).filter(c => galaxy.planets[c].player === player)
+    : [coords];
+  for (const c of all) markOne(c, mark, on);
+  save({ map: true });
+}
+
+function markOne(coords, mark, on) {
   const old = galaxy.planets[coords]
     || { planet: targets[coords]?.planet || "", player: "", status: "i", moon: false, debris: false, alliance: "" };
   const p = { ...old, manual: Date.now() };
@@ -218,7 +229,6 @@ function markPlanet(coords, mark, on) {
     p.status = (active ? "" : idle) + (flag("S") ? "S" : "") + (flag("N") ? "N" : "") + (flag("v") ? "v" : "");
   }
   galaxy.planets[coords] = p;
-  save({ map: true });
 }
 
 const openEdits = new Set();  // раскрытые «Изменить статус» переживают перерисовку
@@ -664,7 +674,7 @@ const byCoordsStr = (a, b) => { const x = SK.parseCoords(a), y = SK.parseCoords(
 function activePlanets() {
   const mine = new Set(settings.planets.map(p => galaxy.planets[p.coords]?.player).filter(Boolean));
   return Object.entries(galaxy.planets).map(([coords, p]) => ({ coords, ...p, player: p.player || "" }))
-    .filter(p => (p.player || p.manual) && !p.deleted && !isInactive(p.status) && !mine.has(p.player));
+    .filter(p => (p.player || p.manual) && !p.deleted && (settings.activeInactive || !isInactive(p.status)) && !mine.has(p.player));
 }
 
 /** « · №12, 345 млн очков» по рейтингу, если игрок в нём есть. */
@@ -688,6 +698,7 @@ function renderActive() {
   $("active-strong").checked = settings.activeStrong;
   $("active-noob").checked = settings.activeNoob;
   $("active-vacation").checked = settings.activeVacation;
+  $("active-inactive").checked = settings.activeInactive;
   if (document.activeElement !== $("active-player")) $("active-player").value = settings.activePlayer;
   if (document.activeElement !== $("active-rank")) $("active-rank").value = settings.activeMinRank || "";
 
@@ -700,7 +711,7 @@ function renderActive() {
     // Без места в рейтинге (служебные аккаунты, игроки новее рейтинга) при фильтре не показываем.
     .filter(p => !settings.activeMinRank || rating.players[p.player]?.[0] >= settings.activeMinRank)
     .filter(p => (settings.activeStrong || !(p.status || "").includes("S")) && (settings.activeNoob || !(p.status || "").includes("N"))
-      && (settings.activeVacation || !(p.status || "").includes("v")))
+      && (settings.activeVacation || !(p.status || "").includes("v")) && (settings.activeInactive || !isInactive(p.status)))
     .map(p => ({ ...p, dist: at && SK.distance(at, SK.parseCoords(p.coords)) }))
     .sort(byDist ? (a, b) => a.dist - b.dist || byCoordsStr(a.coords, b.coords) : (a, b) => byCoordsStr(a.coords, b.coords));
   const pages = Math.max(1, Math.ceil(list.length / ACTIVE_PAGE));
@@ -910,6 +921,7 @@ $("active-from").addEventListener("change", e => activeView({ activeFrom: e.targ
 $("active-strong").addEventListener("change", e => activeView({ activeStrong: e.target.checked }));
 $("active-noob").addEventListener("change", e => activeView({ activeNoob: e.target.checked }));
 $("active-vacation").addEventListener("change", e => activeView({ activeVacation: e.target.checked }));
+$("active-inactive").addEventListener("change", e => activeView({ activeInactive: e.target.checked }));
 // Ник фильтрует на лету, без перерисовки остальной страницы; сохраняется при выходе из поля.
 $("active-player").addEventListener("input", e => { settings.activePlayer = e.target.value; activePage = 1; renderActive(); });
 $("active-player").addEventListener("change", () => save({ changed: false }));
