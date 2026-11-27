@@ -913,4 +913,4 @@ if (require.main === module) {
 }
 
 module.exports = { adb, screen, find, tap, tapText, setField, menu, switchPlanet, galaxy, overview, sleep, swipe, scrollTop,
-                   visibleLines, joinOverlap, withLock, screencap, chooseRange, COMMANDS, DATA, loadData, saveData, loadGalaxy };
+                   visibleLines, joinOverlap, withLock, screencap, chooseRange, readSystem, COMMANDS, DATA, loadData, saveData, loadGalaxy };

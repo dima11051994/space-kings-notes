@@ -487,8 +487,8 @@ function renderColonyAdvice(planets, bestMine, bonus) {
       + `Изучать, когда окупаемость лучшей шахты дойдёт до ${hours(c.hours)}. ${plan}`;
 }
 
-/** Сумма в металле со знаком: выгода бывает отрицательной. */
-const money = n => (n < 0 ? "−" : "") + fmtShort(Math.abs(n));
+/** Сумма в дейтерии со знаком: расчёт внутри в металле, показываем в дейтерии (÷4). */
+const money = n => (n < 0 ? "−" : "") + fmtShort(Math.abs(n) / 4) + " дейт.";
 
 // ---- Самый дешёвый флот (cheapest.js) ----
 
@@ -600,7 +600,7 @@ async function runCheap(r) {
   if (typeof Worker === "undefined") { setStatus("cheap-status", "Браузер не умеет считать в фоне.", "err"); return; }
   stopCheap();
   const t = cfg.defender.techs;
-  $("cheap-target").textContent = `Цель ${r.coords}, отчёт ${dateTime(r.time)}: оборона и флот ${fmtShort(ATTACK.defenseCost(cfg.defense))}, `
+  $("cheap-target").textContent = `Цель ${r.coords}, отчёт ${dateTime(r.time)}: оборона и флот ${fmtShort(ATTACK.defenseCost(cfg.defense) / 4)} дейт., `
     + `дистанция ${fmt(cfg.dists[0])}; технологии цели ${cfg.own ? "— мои (в отчёте их нет)" : `оружие ${t["Оружейная технология"]}, щиты ${t["Щитовая технология"]}, броня ${t["Броня космических кораблей"]}`}.`;
   $("cheap-run").disabled = true;
   $("cheap-stop").hidden = false;
